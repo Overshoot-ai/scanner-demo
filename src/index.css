@@ -1,1 +1,29 @@
 @import "tailwindcss";
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply antialiased;
+    touch-action: pan-y;
+  }
+
+  /* Prevent zoom on input focus (iOS) */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+@layer utilities {
+  .touch-action-none {
+    touch-action: none;
+  }
+
+  .overscroll-none {
+    overscroll-behavior: none;
+  }
+}
