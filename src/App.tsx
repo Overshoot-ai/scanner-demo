@@ -140,9 +140,7 @@ export default function App() {
         await audioContextRef.current.resume();
       }
 
-      const apiUrl =
-        import.meta.env.VITE_API_URL ||
-        "https://cluster1.overshoot.ai/api/v0.2";
+      const apiUrl = "https://cluster1.overshoot.ai/api/v0.2";
       const apiKey = import.meta.env.VITE_API_KEY || "";
 
       console.log("Initializing with API URL:", apiUrl);
