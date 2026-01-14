@@ -14,6 +14,10 @@ export default function App() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string>("");
   const [hasPermission, setHasPermission] = useState(false);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>(
+    [],
+  );
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
 
   const visionRef = useRef<RealtimeVision | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -28,7 +32,13 @@ export default function App() {
     timestamp: number;
   }>({ wasVisible: false, distance: null, timestamp: 0 });
   const ANNOUNCEMENT_COOLDOWN_MS = 5000; // Only announce every 5 seconds max
-  const DISTANCE_CHANGE_THRESHOLD = true; // Announce when distance category changes
+
+  // Track consecutive negatives to avoid false "object lost" announcements
+  const consecutiveNegativesRef = useRef<number>(0);
+  const REQUIRED_NEGATIVES_FOR_LOST = 3; // Need 3 consecutive negatives to declare "lost"
+
+  // Track if speech is currently playing to avoid interruptions
+  const isSpeakingRef = useRef<boolean>(false);
 
   // Initialize audio context
   useEffect(() => {
@@ -40,6 +50,36 @@ export default function App() {
         audioContextRef.current?.close();
       }
     };
+  }, []);
+
+  // Enumerate available video devices
+  useEffect(() => {
+    const getDevices = async () => {
+      try {
+        // Request permission first
+        await navigator.mediaDevices.getUserMedia({ video: true });
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(
+          (device) => device.kind === "videoinput",
+        );
+        setAvailableDevices(videoDevices);
+
+        // Auto-select Meta glasses if available
+        const metaDevice = videoDevices.find(
+          (d) =>
+            d.label.toLowerCase().includes("meta") ||
+            d.label.toLowerCase().includes("ray-ban"),
+        );
+        if (metaDevice) {
+          setSelectedDeviceId(metaDevice.deviceId);
+        } else if (videoDevices.length > 0) {
+          setSelectedDeviceId(videoDevices[0].deviceId);
+        }
+      } catch (err) {
+        console.error("Failed to enumerate devices:", err);
+      }
+    };
+    getDevices();
   }, []);
 
   // Update beeper based on result
@@ -150,13 +190,15 @@ export default function App() {
         apiUrl,
         apiKey,
         prompt: `You are helping a visually impaired person find: "${searchQuery}". 
-Analyze the video and determine if the object is visible. Return JSON with:
-- visible (boolean): is the object visible in frame?
-- confidence (number 0-1): how confident are you it's visible?
-- distance (string): if visible, estimate "very close", "close", "medium", or "far"
-- description (string): brief description of what you see and where the object is located
+Analyze the video and determine if the object is visible. Return ONLY JSON with these fields:
+- visible (boolean): is the object clearly visible in frame?
+- confidence (number 0-1): how confident are you it's the correct object?
+- distance (string): ONLY if visible=true, estimate distance. For household items: "very close" = within arm's reach (< 1 meter), "close" = 1-2 meters, "medium" = 2-4 meters, "far" = > 4 meters. For large objects like doors/cars, scale proportionally.
+- description (string): ONLY if visible=true, give location in 5 words max using spatial references the user can feel or know (e.g., "on the table", "by the wall", "near the window", "on the floor"). NEVER use "left/right side" or camera-relative directions - the user is moving the camera and these are confusing.
 
-Be very accurate and helpful. If you see something similar but not exactly matching, set visible to false but describe what you see.`,
+CRITICAL: If visible=false, do NOT include distance or description fields at all. Return only {"visible": false, "confidence": 0}.
+
+Be precise - only set visible=true if you're confident it's the correct object.`,
         source: {
           type: "camera",
           cameraFacing: "environment",
@@ -164,9 +206,9 @@ Be very accurate and helpful. If you see something similar but not exactly match
         backend: "overshoot",
         processing: {
           fps: 30,
-          sampling_ratio: 0.3,
+          sampling_ratio: 0.2,
           clip_length_seconds: 1,
-          delay_seconds: 0.5,
+          delay_seconds: 0.4,
         },
         outputSchema: {
           type: "object",
@@ -187,6 +229,13 @@ Be very accurate and helpful. If you see something similar but not exactly match
               const parsed = JSON.parse(inferenceResult.result) as ScanResult;
               setResult(parsed);
 
+              // Track consecutive negatives
+              if (!parsed.visible) {
+                consecutiveNegativesRef.current++;
+              } else {
+                consecutiveNegativesRef.current = 0;
+              }
+
               // Smart deduplication for voice announcements
               if ("speechSynthesis" in window) {
                 const now = Date.now();
@@ -200,9 +249,8 @@ Be very accurate and helpful. If you see something similar but not exactly match
                 // Case 1: Object just became visible (transition from not found to found)
                 if (parsed.visible && !lastAnnouncement.wasVisible) {
                   shouldAnnounce = true;
-                  announcementText = `Found ${searchQuery}! ${
-                    parsed.distance ? `Distance: ${parsed.distance}.` : ""
-                  } ${parsed.description || ""}`;
+                  // Keep it brief - just the essential info
+                  announcementText = `Found! ${parsed.distance || ""}.${parsed.description ? " " + parsed.description : ""}`;
                 }
                 // Case 2: Object was visible and distance changed significantly
                 else if (
@@ -210,33 +258,52 @@ Be very accurate and helpful. If you see something similar but not exactly match
                   lastAnnouncement.wasVisible &&
                   parsed.distance &&
                   parsed.distance !== lastAnnouncement.distance &&
-                  timeSinceLastAnnouncement > ANNOUNCEMENT_COOLDOWN_MS
+                  timeSinceLastAnnouncement > ANNOUNCEMENT_COOLDOWN_MS &&
+                  !isSpeakingRef.current // Don't interrupt ongoing speech
                 ) {
                   shouldAnnounce = true;
-                  announcementText = `Distance changed to ${parsed.distance}`;
+                  announcementText = `${parsed.distance}`;
                 }
-                // Case 3: Object disappeared (was visible, now not visible)
-                else if (!parsed.visible && lastAnnouncement.wasVisible) {
+                // Case 3: Object disappeared - ONLY after 3 consecutive negatives
+                else if (
+                  !parsed.visible &&
+                  lastAnnouncement.wasVisible &&
+                  consecutiveNegativesRef.current >=
+                    REQUIRED_NEGATIVES_FOR_LOST &&
+                  !isSpeakingRef.current // Don't interrupt ongoing speech
+                ) {
                   shouldAnnounce = true;
-                  announcementText = "Object lost. Keep searching.";
+                  announcementText = "Lost. Keep searching.";
                 }
 
                 if (shouldAnnounce) {
-                  // Cancel any ongoing speech
-                  window.speechSynthesis.cancel();
+                  // Don't cancel ongoing speech - let it finish
+                  if (!isSpeakingRef.current) {
+                    isSpeakingRef.current = true;
 
-                  const utterance = new SpeechSynthesisUtterance(
-                    announcementText,
-                  );
-                  utterance.rate = 1.2;
-                  window.speechSynthesis.speak(utterance);
+                    const utterance = new SpeechSynthesisUtterance(
+                      announcementText,
+                    );
+                    utterance.rate = 1.4; // Faster speech for real-time feel
 
-                  // Update last announcement tracking
-                  lastAnnouncementRef.current = {
-                    wasVisible: parsed.visible,
-                    distance: parsed.distance || null,
-                    timestamp: now,
-                  };
+                    // Track when speech ends
+                    utterance.onend = () => {
+                      isSpeakingRef.current = false;
+                    };
+
+                    utterance.onerror = () => {
+                      isSpeakingRef.current = false;
+                    };
+
+                    window.speechSynthesis.speak(utterance);
+
+                    // Update last announcement tracking
+                    lastAnnouncementRef.current = {
+                      wasVisible: parsed.visible,
+                      distance: parsed.distance || null,
+                      timestamp: now,
+                    };
+                  }
                 }
               }
             } catch (e) {
@@ -299,6 +366,8 @@ Be very accurate and helpful. If you see something similar but not exactly match
       distance: null,
       timestamp: 0,
     };
+    consecutiveNegativesRef.current = 0;
+    isSpeakingRef.current = false;
 
     setIsScanning(false);
     setResult(null);
@@ -337,6 +406,45 @@ Be very accurate and helpful. If you see something similar but not exactly match
 
         {/* Main content */}
         <div className="space-y-8">
+          {/* Camera selector */}
+          {availableDevices.length > 1 && (
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50 shadow-2xl">
+              <label
+                htmlFor="camera-select"
+                className="block text-lg font-medium mb-3 text-slate-200"
+              >
+                Camera Source
+              </label>
+              <select
+                id="camera-select"
+                value={selectedDeviceId}
+                onChange={(e) => setSelectedDeviceId(e.target.value)}
+                disabled={isScanning}
+                className="w-full px-4 py-3 bg-slate-900/70 border-2 border-slate-600 rounded-xl text-slate-100 focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Select camera device"
+              >
+                {availableDevices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label ||
+                      `Camera ${availableDevices.indexOf(device) + 1}`}
+                    {(device.label.toLowerCase().includes("meta") ||
+                      device.label.toLowerCase().includes("ray-ban")) &&
+                      " 🥽"}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-500 mt-2">
+                {selectedDeviceId &&
+                availableDevices
+                  .find((d) => d.deviceId === selectedDeviceId)
+                  ?.label.toLowerCase()
+                  .includes("meta")
+                  ? "🥽 Meta AI glasses detected!"
+                  : "Select your camera or Meta AI glasses"}
+              </p>
+            </div>
+          )}
+
           {/* Search input */}
           <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-8 border border-slate-700/50 shadow-2xl">
             <label
