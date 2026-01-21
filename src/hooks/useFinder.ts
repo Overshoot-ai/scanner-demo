@@ -99,7 +99,6 @@ Analyze the video and determine if the object is visible. Return ONLY JSON with 
 - visible (boolean): is the object clearly visible in frame?
 - confidence (number 0-1): how confident are you it's the correct object?
 - distance (string): ONLY if visible=true, estimate distance. For household items: "very close" = within arm's reach (< 1 meter), "close" = 1-2 meters, "medium" = 2-4 meters, "far" = > 4 meters. For large objects like doors/cars, scale proportionally.
-- description (string): ONLY if visible=true, give location in 5 words max using spatial references the user can feel or know (e.g., "on the table", "by the wall", "near the window", "on the floor"). NEVER use "left/right side" or camera-relative directions.
 
 CRITICAL: If visible=false, do NOT include distance or description fields at all. Return only {"visible": false, "confidence": 0}.
 
@@ -109,12 +108,12 @@ Be precise - only set visible=true if you're confident it's the correct object.`
           cameraFacing: "environment",
         },
         backend: "overshoot",
-        model: "Qwen/Qwen3-VL-8B-Instruct",
+        model: "Qwen/Qwen3-VL-30B-A3B-Instruct",
         processing: {
           fps: 30,
-          sampling_ratio: 0.6,
-          clip_length_seconds: 0.3,
-          delay_seconds: 0.2,
+          sampling_ratio: 1.0,
+          clip_length_seconds: 0.1,
+          delay_seconds: 0.1,
         },
         outputSchema: {
           type: "object",
@@ -125,7 +124,6 @@ Be precise - only set visible=true if you're confident it's the correct object.`
               type: "string",
               enum: ["very close", "close", "medium", "far"],
             },
-            description: { type: "string" },
           },
           required: ["visible", "confidence"],
         },
