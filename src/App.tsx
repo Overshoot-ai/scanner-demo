@@ -9,9 +9,9 @@ interface ScanResult {
 }
 
 interface ItemLocation {
-  heading: number; // alpha value when item was detected
-  beta: number; // x-axis tilt
-  gamma: number; // y-axis tilt
+  heading: number;
+  beta: number;
+  gamma: number;
   timestamp: number;
   searchQuery: string;
 }
@@ -21,7 +21,6 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string>("");
-  const [hasPermission, setHasPermission] = useState(false);
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>(
     [],
   );
@@ -33,6 +32,9 @@ export default function App() {
   const [currentGamma, setCurrentGamma] = useState<number | null>(null);
   const [itemLocation, setItemLocation] = useState<ItemLocation | null>(null);
   const [guidance, setGuidance] = useState<string>("");
+  const [glowDirection, setGlowDirection] = useState<
+    "left" | "right" | "center" | null
+  >(null);
   const [needsOrientationPermission, setNeedsOrientationPermission] =
     useState(false);
 
@@ -42,7 +44,6 @@ export default function App() {
   const gainNodeRef = useRef<GainNode | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Deduplication refs for voice announcements
   const lastAnnouncementRef = useRef<{
     wasVisible: boolean;
     distance: string | null;
@@ -50,17 +51,14 @@ export default function App() {
   }>({ wasVisible: false, distance: null, timestamp: 0 });
   const ANNOUNCEMENT_COOLDOWN_MS = 5000;
 
-  // Track consecutive negatives to avoid false "object lost" announcements
   const consecutiveNegativesRef = useRef<number>(0);
   const REQUIRED_NEGATIVES_FOR_LOST = 3;
 
-  // Track if speech is currently playing to avoid interruptions
   const isSpeakingRef = useRef<boolean>(false);
 
-  // Track last guidance announcement to avoid spam
   const lastGuidanceAnnouncementRef = useRef<string>("");
   const lastGuidanceTimeRef = useRef<number>(0);
-  const GUIDANCE_ANNOUNCEMENT_COOLDOWN = 3000; // 3 seconds between guidance announcements
+  const GUIDANCE_ANNOUNCEMENT_COOLDOWN = 3000;
 
   // Initialize audio context
   useEffect(() => {
@@ -74,7 +72,39 @@ export default function App() {
     };
   }, []);
 
-  // Request device orientation permission (iOS 13+)
+  // Play wooden "found" sound
+  const playFoundSound = () => {
+    if (!audioContextRef.current) return;
+
+    const audioContext = audioContextRef.current;
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    const filter = audioContext.createBiquadFilter();
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(220, audioContext.currentTime); // A3 - warm, woody tone
+
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(800, audioContext.currentTime); // Mellow the sound
+    filter.Q.setValueAtTime(1, audioContext.currentTime);
+
+    oscillator.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    const now = audioContext.currentTime;
+    const duration = 0.4;
+
+    // Soft attack and decay for wooden feel
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(0.15, now + 0.05); // Soft peak
+    gainNode.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+    oscillator.start(now);
+    oscillator.stop(now + duration);
+  };
+
+  // Request device orientation permission
   const requestOrientationPermission = async () => {
     if (
       typeof DeviceOrientationEvent !== "undefined" &&
@@ -87,25 +117,18 @@ export default function App() {
         if (permission === "granted") {
           setNeedsOrientationPermission(false);
           return true;
-        } else {
-          setError(
-            "Device orientation permission denied. Find again feature won't work.",
-          );
-          return false;
         }
+        return false;
       } catch (err) {
         console.error("Error requesting orientation permission:", err);
-        setError("Failed to request orientation permission");
         return false;
       }
     }
-    // Android and other platforms don't need permission
     return true;
   };
 
   // Device orientation listener
   useEffect(() => {
-    // Check if permission is needed (iOS 13+)
     if (
       typeof DeviceOrientationEvent !== "undefined" &&
       typeof (DeviceOrientationEvent as any).requestPermission === "function"
@@ -114,15 +137,9 @@ export default function App() {
     }
 
     const handleOrientation = (event: DeviceOrientationEvent) => {
-      if (event.alpha !== null) {
-        setCurrentHeading(event.alpha);
-      }
-      if (event.beta !== null) {
-        setCurrentBeta(event.beta);
-      }
-      if (event.gamma !== null) {
-        setCurrentGamma(event.gamma);
-      }
+      if (event.alpha !== null) setCurrentHeading(event.alpha);
+      if (event.beta !== null) setCurrentBeta(event.beta);
+      if (event.gamma !== null) setCurrentGamma(event.gamma);
     };
 
     window.addEventListener("deviceorientation", handleOrientation);
@@ -130,60 +147,78 @@ export default function App() {
       window.removeEventListener("deviceorientation", handleOrientation);
   }, []);
 
-  // Calculate guidance when orientation changes
+  // Calculate guidance and glow direction
   useEffect(() => {
     if (currentHeading === null || !itemLocation || !isScanning) {
       setGuidance("");
+      setGlowDirection(null);
       return;
     }
 
     const targetHeading = itemLocation.heading;
     let diff = targetHeading - currentHeading;
 
-    // Normalize to -180 to 180
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
 
-    const threshold = 15; // degrees tolerance
-
+    const threshold = 15;
     let newGuidance = "";
+    let newGlowDirection: "left" | "right" | "center" | null = null;
 
     if (Math.abs(diff) < threshold) {
-      // Check if vertical angle is also close
       const betaDiff =
         currentBeta !== null && itemLocation.beta !== null
           ? Math.abs(currentBeta - itemLocation.beta)
           : 0;
 
       if (betaDiff < 20) {
-        newGuidance = "🎯 You're pointing at the right spot!";
+        newGuidance = "Right here";
+        newGlowDirection = "center";
       } else {
-        newGuidance = `🎯 Right direction! ${betaDiff > 0 ? (currentBeta! > itemLocation.beta! ? "Tilt down" : "Tilt up") : ""}`;
+        newGuidance =
+          betaDiff > 0
+            ? currentBeta! > itemLocation.beta!
+              ? "Tilt down"
+              : "Tilt up"
+            : "Right here";
+        newGlowDirection = "center";
       }
     } else {
-      const degrees = Math.round(Math.abs(diff));
+      const degrees = Math.abs(diff);
+      // Camera faces opposite direction, so invert the turn direction
       if (diff > 0) {
-        newGuidance = `↻ Turn right ${degrees}°`;
+        // Need to turn left
+        if (degrees > 45) {
+          newGuidance = "Left";
+        } else {
+          newGuidance = "Slight left";
+        }
+        newGlowDirection = "left";
       } else {
-        newGuidance = `↺ Turn left ${degrees}°`;
+        // Need to turn right
+        if (degrees > 45) {
+          newGuidance = "Right";
+        } else {
+          newGuidance = "Slight right";
+        }
+        newGlowDirection = "right";
       }
     }
 
     setGuidance(newGuidance);
+    setGlowDirection(newGlowDirection);
 
-    // Voice announcement for guidance (with cooldown and deduplication)
+    // Voice guidance
     if ("speechSynthesis" in window && !isSpeakingRef.current) {
       const now = Date.now();
       const timeSinceLastGuidance = now - lastGuidanceTimeRef.current;
 
-      // Only announce if guidance changed significantly and cooldown passed
       if (
         newGuidance !== lastGuidanceAnnouncementRef.current &&
         timeSinceLastGuidance > GUIDANCE_ANNOUNCEMENT_COOLDOWN
       ) {
-        // Only announce important guidance changes
         if (
-          newGuidance.includes("right spot") ||
+          newGuidance.includes("Right here") ||
           (timeSinceLastGuidance > GUIDANCE_ANNOUNCEMENT_COOLDOWN * 2 &&
             Math.abs(diff) > 30)
         ) {
@@ -191,19 +226,14 @@ export default function App() {
           lastGuidanceAnnouncementRef.current = newGuidance;
           lastGuidanceTimeRef.current = now;
 
-          const utterance = new SpeechSynthesisUtterance(
-            newGuidance.replace(/[↻↺🎯]/g, ""),
-          );
+          const utterance = new SpeechSynthesisUtterance(newGuidance);
           utterance.rate = 1.3;
-
           utterance.onend = () => {
             isSpeakingRef.current = false;
           };
-
           utterance.onerror = () => {
             isSpeakingRef.current = false;
           };
-
           window.speechSynthesis.speak(utterance);
         }
       }
@@ -230,12 +260,9 @@ export default function App() {
 
       setItemLocation(newLocation);
 
-      // Announce that location has been marked
       if ("speechSynthesis" in window && !isSpeakingRef.current) {
         isSpeakingRef.current = true;
-        const utterance = new SpeechSynthesisUtterance(
-          "Location saved. I can guide you back if you lose it.",
-        );
+        const utterance = new SpeechSynthesisUtterance("Location saved");
         utterance.rate = 1.3;
         utterance.onend = () => {
           isSpeakingRef.current = false;
@@ -255,10 +282,15 @@ export default function App() {
     itemLocation,
   ]);
 
-  // Enumerate available video devices
+  // Enumerate devices
   useEffect(() => {
     const getDevices = async () => {
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setError("Camera requires HTTPS");
+          return;
+        }
+
         await navigator.mediaDevices.getUserMedia({ video: true });
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter(
@@ -283,7 +315,7 @@ export default function App() {
     getDevices();
   }, []);
 
-  // Update beeper based on result
+  // Audio beeping
   useEffect(() => {
     if (!isScanning || !result || !audioContextRef.current) return;
 
@@ -293,15 +325,12 @@ export default function App() {
       oscillatorRef.current.stop();
       oscillatorRef.current = null;
     }
-
     if (gainNodeRef.current) {
       gainNodeRef.current.disconnect();
       gainNodeRef.current = null;
     }
 
-    if (!result.visible || result.confidence < 0.3) {
-      return;
-    }
+    if (!result.visible || result.confidence < 0.3) return;
 
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
@@ -317,16 +346,13 @@ export default function App() {
       baseFrequency,
       audioContext.currentTime,
     );
-
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
 
     const beep = () => {
       if (!gainNodeRef.current || !isScanning) return;
-
       const now = audioContext.currentTime;
       const beepDuration = 0.1;
-
       gainNode.gain.setValueAtTime(0, now);
       gainNode.gain.linearRampToValueAtTime(0.3, now + 0.02);
       gainNode.gain.setValueAtTime(0.3, now + beepDuration - 0.02);
@@ -335,7 +361,6 @@ export default function App() {
 
     oscillator.start();
     beep();
-
     const interval = setInterval(beep, beepRate * 1000);
 
     return () => {
@@ -353,19 +378,12 @@ export default function App() {
 
   const startScanning = async () => {
     if (!searchQuery.trim()) {
-      setError("Please describe what you're looking for");
+      setError("Describe what you're looking for");
       return;
     }
 
-    // Request orientation permission if needed
     if (needsOrientationPermission) {
-      const granted = await requestOrientationPermission();
-      if (!granted) {
-        // Continue anyway, but find again won't work
-        console.warn(
-          "Orientation permission not granted, find again feature disabled",
-        );
-      }
+      await requestOrientationPermission();
     }
 
     setError("");
@@ -373,8 +391,15 @@ export default function App() {
     setResult(null);
 
     try {
-      if (audioContextRef.current?.state === "suspended") {
-        await audioContextRef.current.resume();
+      // Ensure audio context is resumed (required on mobile)
+      if (audioContextRef.current) {
+        if (audioContextRef.current.state === "suspended") {
+          await audioContextRef.current.resume();
+          console.log("Audio context resumed");
+        }
+        console.log("Audio context state:", audioContextRef.current.state);
+      } else {
+        console.error("Audio context not initialized");
       }
 
       const apiUrl = "https://cluster1.overshoot.ai/api/v0.2";
@@ -388,7 +413,7 @@ Analyze the video and determine if the object is visible. Return ONLY JSON with 
 - visible (boolean): is the object clearly visible in frame?
 - confidence (number 0-1): how confident are you it's the correct object?
 - distance (string): ONLY if visible=true, estimate distance. For household items: "very close" = within arm's reach (< 1 meter), "close" = 1-2 meters, "medium" = 2-4 meters, "far" = > 4 meters. For large objects like doors/cars, scale proportionally.
-- description (string): ONLY if visible=true, give location in 5 words max using spatial references the user can feel or know (e.g., "on the table", "by the wall", "near the window", "on the floor"). NEVER use "left/right side" or camera-relative directions - the user is moving the camera and these are confusing.
+- description (string): ONLY if visible=true, give location in 5 words max using spatial references the user can feel or know (e.g., "on the table", "by the wall", "near the window", "on the floor"). NEVER use "left/right side" or camera-relative directions.
 
 CRITICAL: If visible=false, do NOT include distance or description fields at all. Return only {"visible": false, "confidence": 0}.
 
@@ -436,12 +461,24 @@ Be precise - only set visible=true if you're confident it's the correct object.`
                 const timeSinceLastAnnouncement =
                   now - lastAnnouncement.timestamp;
 
+                console.log("📊 State:", {
+                  visible: parsed.visible,
+                  wasVisible: lastAnnouncement.wasVisible,
+                  distance: parsed.distance,
+                  lastDistance: lastAnnouncement.distance,
+                  timeSince: timeSinceLastAnnouncement,
+                  isSpeaking: isSpeakingRef.current,
+                });
+
                 let shouldAnnounce = false;
                 let announcementText = "";
 
                 if (parsed.visible && !lastAnnouncement.wasVisible) {
+                  console.log("✨ Object just became visible!");
                   shouldAnnounce = true;
-                  announcementText = `Found! ${parsed.distance || ""}.${parsed.description ? " " + parsed.description : ""}`;
+                  announcementText = `Found! ${parsed.distance || ""}.`;
+                  // Play wooden sound
+                  playFoundSound();
                 } else if (
                   parsed.visible &&
                   lastAnnouncement.wasVisible &&
@@ -450,44 +487,37 @@ Be precise - only set visible=true if you're confident it's the correct object.`
                   timeSinceLastAnnouncement > ANNOUNCEMENT_COOLDOWN_MS &&
                   !isSpeakingRef.current
                 ) {
+                  console.log("📏 Distance changed!");
                   shouldAnnounce = true;
                   announcementText = `${parsed.distance}`;
-                } else if (
-                  !parsed.visible &&
-                  lastAnnouncement.wasVisible &&
-                  consecutiveNegativesRef.current >=
-                    REQUIRED_NEGATIVES_FOR_LOST &&
-                  !isSpeakingRef.current
-                ) {
-                  shouldAnnounce = true;
-                  announcementText = "Lost. Keep searching.";
                 }
+                // Removed "Lost. Keep searching" announcement
 
-                if (shouldAnnounce) {
-                  if (!isSpeakingRef.current) {
-                    isSpeakingRef.current = true;
+                if (shouldAnnounce && !isSpeakingRef.current) {
+                  console.log("🔊 About to announce:", announcementText);
+                  isSpeakingRef.current = true;
+                  const utterance = new SpeechSynthesisUtterance(
+                    announcementText,
+                  );
+                  utterance.rate = 1.4;
+                  utterance.onend = () => {
+                    console.log("✅ Speech ended:", announcementText);
+                    isSpeakingRef.current = false;
+                  };
+                  utterance.onerror = (e) => {
+                    console.error("❌ Speech error:", e, announcementText);
+                    isSpeakingRef.current = false;
+                  };
+                  utterance.onstart = () => {
+                    console.log("▶️ Speech started:", announcementText);
+                  };
+                  window.speechSynthesis.speak(utterance);
 
-                    const utterance = new SpeechSynthesisUtterance(
-                      announcementText,
-                    );
-                    utterance.rate = 1.4;
-
-                    utterance.onend = () => {
-                      isSpeakingRef.current = false;
-                    };
-
-                    utterance.onerror = () => {
-                      isSpeakingRef.current = false;
-                    };
-
-                    window.speechSynthesis.speak(utterance);
-
-                    lastAnnouncementRef.current = {
-                      wasVisible: parsed.visible,
-                      distance: parsed.distance || null,
-                      timestamp: now,
-                    };
-                  }
+                  lastAnnouncementRef.current = {
+                    wasVisible: parsed.visible,
+                    distance: parsed.distance || null,
+                    timestamp: now,
+                  };
                 }
               }
             } catch (e) {
@@ -504,7 +534,6 @@ Be precise - only set visible=true if you're confident it's the correct object.`
 
       await vision.start();
       visionRef.current = vision;
-      setHasPermission(true);
 
       const stream = vision.getMediaStream();
       if (stream && videoRef.current) {
@@ -512,11 +541,30 @@ Be precise - only set visible=true if you're confident it's the correct object.`
       }
 
       if ("speechSynthesis" in window) {
+        console.log("🎤 Starting announcement for:", searchQuery);
         const utterance = new SpeechSynthesisUtterance(
-          `Scanning for ${searchQuery}. Point your camera around to search.`,
+          `Scanning for ${searchQuery}`,
         );
         utterance.rate = 1.2;
+        utterance.onstart = () => console.log("▶️ Start speech began");
+        utterance.onend = () => console.log("✅ Start speech ended");
+        utterance.onerror = (e) => console.error("❌ Start speech error:", e);
         window.speechSynthesis.speak(utterance);
+      } else {
+        console.error("❌ speechSynthesis not available");
+      }
+
+      // Test beep to verify audio is working
+      if (audioContextRef.current) {
+        const testOsc = audioContextRef.current.createOscillator();
+        const testGain = audioContextRef.current.createGain();
+        testOsc.connect(testGain);
+        testGain.connect(audioContextRef.current.destination);
+        testOsc.frequency.value = 440;
+        testGain.gain.value = 0.2;
+        testOsc.start();
+        testOsc.stop(audioContextRef.current.currentTime + 0.1);
+        console.log("Test beep played");
       }
     } catch (err) {
       console.error("Failed to start scanning:", err);
@@ -546,6 +594,7 @@ Be precise - only set visible=true if you're confident it's the correct object.`
 
     setIsScanning(false);
     setResult(null);
+    setGlowDirection(null);
 
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -557,375 +606,191 @@ Be precise - only set visible=true if you're confident it's the correct object.`
   const clearItemLocation = () => {
     setItemLocation(null);
     setGuidance("");
+    setGlowDirection(null);
     lastGuidanceAnnouncementRef.current = "";
     lastGuidanceTimeRef.current = 0;
 
     if ("speechSynthesis" in window) {
-      const utterance = new SpeechSynthesisUtterance("Location marker cleared");
+      const utterance = new SpeechSynthesisUtterance("Location cleared");
       utterance.rate = 1.3;
       window.speechSynthesis.speak(utterance);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+    <div className="fixed inset-0 bg-black overflow-hidden">
+      {/* Screen reader announcements */}
       <div
         className="sr-only"
         role="status"
         aria-live="polite"
         aria-atomic="true"
       >
-        {result?.visible &&
-          `Object found with ${Math.round(result.confidence * 100)}% confidence`}
-        {error && `Error: ${error}`}
+        {result?.visible && `Object found`}
         {guidance && guidance}
       </div>
 
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
-        <header className="text-center mb-12">
-          <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
-            Vision Scanner
-          </h1>
-          <p className="text-xl text-slate-400 font-light">
-            Audio-guided object detection with navigation
-          </p>
-        </header>
+      {!isScanning ? (
+        // Setup screen
+        <div className="h-full flex flex-col p-6 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+          <div className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full">
+            <div className="text-center mb-12">
+              <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                Vision Scanner
+              </h1>
+              <p className="text-slate-400">Audio-guided object finding</p>
+            </div>
 
-        <div className="space-y-8">
-          {/* Orientation Permission Notice */}
-          {needsOrientationPermission && !isScanning && (
-            <div className="bg-blue-900/30 border-2 border-blue-600 rounded-xl p-4 text-blue-200">
-              <p className="text-sm">
-                📱 <strong>iOS Device Detected:</strong> The "Find Again"
-                feature requires device orientation permission. You'll be asked
-                when you start scanning.
+            {availableDevices.length > 1 && (
+              <div className="mb-6">
+                <select
+                  value={selectedDeviceId}
+                  onChange={(e) => setSelectedDeviceId(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-800 border-2 border-slate-600 rounded-xl text-slate-100 focus:border-cyan-500 focus:outline-none"
+                >
+                  {availableDevices.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label ||
+                        `Camera ${availableDevices.indexOf(device) + 1}`}
+                      {(device.label.toLowerCase().includes("meta") ||
+                        device.label.toLowerCase().includes("ray-ban")) &&
+                        " 🥽"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="mb-6">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && !isScanning && startScanning()
+                }
+                placeholder="What are you looking for?"
+                className="w-full px-6 py-4 bg-slate-800 border-2 border-slate-600 rounded-xl text-lg text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-2 text-center">
+                e.g., door, keys, water bottle
               </p>
+            </div>
+
+            {error && (
+              <div className="mb-6 bg-red-900/30 border-2 border-red-600 rounded-xl p-4 text-red-200 text-sm">
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={startScanning}
+              disabled={!searchQuery.trim()}
+              className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-5 px-8 rounded-xl shadow-lg text-lg disabled:opacity-50"
+            >
+              🔍 Start Scanning
+            </button>
+
+            {needsOrientationPermission && (
+              <p className="text-xs text-slate-500 mt-4 text-center">
+                📱 You'll be asked for orientation permission on iOS
+              </p>
+            )}
+          </div>
+        </div>
+      ) : (
+        // Scanning screen - audio-first, minimal UI
+        <div className="relative h-full w-full">
+          {/* Camera view */}
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+
+          {/* Directional glow overlay - left */}
+          {glowDirection === "left" && itemLocation && !result?.visible && (
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute left-0 top-0 bottom-0 w-1/2 bg-gradient-to-r from-purple-500/40 to-transparent animate-pulse" />
             </div>
           )}
 
-          {/* Find Again Guidance Display */}
-          {isScanning && itemLocation && guidance && !result?.visible && (
-            <div className="bg-gradient-to-r from-purple-900/50 to-blue-900/50 border-2 border-purple-500 rounded-2xl p-6 shadow-2xl animate-pulse">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <span className="text-4xl">🧭</span>
-                  <div>
-                    <h3 className="text-xl font-bold text-purple-200">
-                      Navigate Back
-                    </h3>
-                    <p className="text-sm text-purple-300">
-                      Guiding you to: {itemLocation.searchQuery}
-                    </p>
-                  </div>
-                </div>
+          {/* Directional glow overlay - right */}
+          {glowDirection === "right" && itemLocation && !result?.visible && (
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute right-0 top-0 bottom-0 w-1/2 bg-gradient-to-l from-purple-500/40 to-transparent animate-pulse" />
+            </div>
+          )}
+
+          {/* Center glow - on target */}
+          {glowDirection === "center" && itemLocation && !result?.visible && (
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute inset-0 bg-purple-500/30 animate-pulse" />
+            </div>
+          )}
+
+          {/* Found state - green border glow */}
+          {result?.visible && (
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute inset-0 border-8 border-green-500 animate-pulse shadow-[inset_0_0_60px_rgba(34,197,94,0.4)]" />
+            </div>
+          )}
+
+          {/* Minimal status indicator - top center */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2">
+            <div
+              className={`px-4 py-2 rounded-full backdrop-blur-sm ${
+                result?.visible
+                  ? "bg-green-900/70 border border-green-500"
+                  : itemLocation
+                    ? "bg-purple-900/70 border border-purple-500"
+                    : "bg-slate-900/70 border border-slate-600"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    result?.visible
+                      ? "bg-green-400"
+                      : itemLocation
+                        ? "bg-purple-400"
+                        : "bg-slate-400"
+                  } animate-pulse`}
+                />
+                <span className="text-white text-sm font-medium">
+                  {result?.visible
+                    ? "Found"
+                    : itemLocation
+                      ? "Navigate"
+                      : "Searching"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom controls */}
+          <div className="absolute bottom-0 left-0 right-0 p-6">
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={stopScanning}
+                className="bg-red-600/90 hover:bg-red-500 backdrop-blur-sm text-white font-semibold py-4 px-8 rounded-full shadow-lg"
+              >
+                Stop
+              </button>
+              {itemLocation && (
                 <button
                   onClick={clearItemLocation}
-                  className="px-4 py-2 bg-red-600/80 hover:bg-red-600 rounded-lg text-sm font-semibold transition-all"
-                  aria-label="Clear saved location"
+                  className="bg-slate-700/90 hover:bg-slate-600 backdrop-blur-sm text-white font-semibold py-4 px-4 rounded-full shadow-lg"
                 >
                   Clear
                 </button>
-              </div>
-              <div className="text-center py-8">
-                <p className="text-4xl font-bold text-white mb-2">{guidance}</p>
-                <p className="text-sm text-purple-200">
-                  Follow the voice guidance
-                </p>
-              </div>
+              )}
             </div>
-          )}
-
-          {/* Camera selector */}
-          {availableDevices.length > 1 && (
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50 shadow-2xl">
-              <label
-                htmlFor="camera-select"
-                className="block text-lg font-medium mb-3 text-slate-200"
-              >
-                Camera Source
-              </label>
-              <select
-                id="camera-select"
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                disabled={isScanning}
-                className="w-full px-4 py-3 bg-slate-900/70 border-2 border-slate-600 rounded-xl text-slate-100 focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                aria-label="Select camera device"
-              >
-                {availableDevices.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label ||
-                      `Camera ${availableDevices.indexOf(device) + 1}`}
-                    {(device.label.toLowerCase().includes("meta") ||
-                      device.label.toLowerCase().includes("ray-ban")) &&
-                      " 🥽"}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-slate-500 mt-2">
-                {selectedDeviceId &&
-                availableDevices
-                  .find((d) => d.deviceId === selectedDeviceId)
-                  ?.label.toLowerCase()
-                  .includes("meta")
-                  ? "🥽 Meta AI glasses detected!"
-                  : "Select your camera or Meta AI glasses"}
-              </p>
-            </div>
-          )}
-
-          {/* Search input */}
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-8 border border-slate-700/50 shadow-2xl">
-            <label
-              htmlFor="search-input"
-              className="block text-lg font-medium mb-3 text-slate-200"
-            >
-              What are you looking for?
-            </label>
-            <p className="text-sm text-slate-400 mb-4">
-              Describe the object you want to find (e.g., "door", "my keys",
-              "water bottle")
-            </p>
-            <input
-              id="search-input"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) =>
-                e.key === "Enter" && !isScanning && startScanning()
-              }
-              disabled={isScanning}
-              placeholder="e.g., door, keys, phone..."
-              className="w-full px-6 py-4 bg-slate-900/70 border-2 border-slate-600 rounded-xl text-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-describedby="search-help"
-            />
-            <p id="search-help" className="text-xs text-slate-500 mt-2">
-              Press Enter to start scanning
-            </p>
           </div>
-
-          {/* Error message */}
-          {error && (
-            <div
-              className="bg-red-900/30 border-2 border-red-600 rounded-xl p-4 text-red-200"
-              role="alert"
-            >
-              <strong className="font-semibold">Error:</strong> {error}
-            </div>
-          )}
-
-          {/* Control buttons */}
-          <div className="flex gap-4">
-            {!isScanning ? (
-              <button
-                onClick={startScanning}
-                disabled={!searchQuery.trim()}
-                className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-4 px-8 rounded-xl shadow-lg hover:shadow-cyan-500/25 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 text-lg"
-                aria-label="Start scanning for object"
-              >
-                🔍 Start Scanning
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={stopScanning}
-                  className="flex-1 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 text-white font-semibold py-4 px-8 rounded-xl shadow-lg hover:shadow-red-500/25 transition-all duration-200 text-lg"
-                  aria-label="Stop scanning"
-                >
-                  ⏹️ Stop Scanning
-                </button>
-                {itemLocation && (
-                  <button
-                    onClick={clearItemLocation}
-                    className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold py-4 px-6 rounded-xl shadow-lg hover:shadow-purple-500/25 transition-all duration-200"
-                    aria-label="Clear saved location"
-                    title="Clear saved item location"
-                  >
-                    🧭 Clear Marker
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Camera preview */}
-          {isScanning && (
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50 shadow-2xl">
-              <h2 className="text-xl font-semibold mb-4 text-slate-200">
-                Camera View
-              </h2>
-              <div className="relative aspect-video bg-slate-900 rounded-xl overflow-hidden">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                  aria-label="Live camera feed"
-                />
-                {result?.visible && (
-                  <div className="absolute inset-0 border-4 border-green-500 animate-pulse pointer-events-none" />
-                )}
-                {/* Compass indicator */}
-                {currentHeading !== null && (
-                  <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-2 text-sm font-mono">
-                    <span className="text-cyan-400">🧭</span>{" "}
-                    {Math.round(currentHeading)}°
-                  </div>
-                )}
-                {/* Location saved indicator */}
-                {itemLocation && (
-                  <div className="absolute top-4 right-4 bg-purple-900/80 backdrop-blur-sm rounded-lg px-3 py-2 text-xs font-semibold text-purple-200 flex items-center gap-2">
-                    <span className="w-2 h-2 bg-purple-400 rounded-full animate-pulse"></span>
-                    Location Saved
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Results display */}
-          {isScanning && result && (
-            <div
-              className={`rounded-2xl p-8 border-2 shadow-2xl transition-all duration-500 ${
-                result.visible
-                  ? "bg-green-900/30 border-green-500"
-                  : "bg-slate-800/50 border-slate-700/50"
-              }`}
-              role="status"
-              aria-live="polite"
-            >
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-4 h-4 rounded-full ${
-                      result.visible
-                        ? "bg-green-500 animate-pulse"
-                        : "bg-slate-600"
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span className="text-2xl font-bold">
-                    {result.visible ? "✓ Found!" : "⏳ Searching..."}
-                  </span>
-                </div>
-
-                <div>
-                  <div className="flex justify-between text-sm text-slate-400 mb-2">
-                    <span>Confidence</span>
-                    <span
-                      aria-label={`Confidence level: ${Math.round(result.confidence * 100)} percent`}
-                    >
-                      {Math.round(result.confidence * 100)}%
-                    </span>
-                  </div>
-                  <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-500 ${
-                        result.confidence > 0.7
-                          ? "bg-green-500"
-                          : result.confidence > 0.4
-                            ? "bg-yellow-500"
-                            : "bg-red-500"
-                      }`}
-                      style={{ width: `${result.confidence * 100}%` }}
-                      role="progressbar"
-                      aria-valuenow={result.confidence * 100}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                    />
-                  </div>
-                </div>
-
-                {result.distance && (
-                  <div className="flex items-center gap-2 text-slate-300">
-                    <span className="text-2xl" aria-hidden="true">
-                      📏
-                    </span>
-                    <span>
-                      <strong>Distance:</strong> {result.distance}
-                    </span>
-                  </div>
-                )}
-
-                {result.description && (
-                  <div className="bg-slate-900/50 rounded-xl p-4 text-slate-200">
-                    <p className="text-sm font-semibold text-slate-400 mb-1">
-                      Description:
-                    </p>
-                    <p>{result.description}</p>
-                  </div>
-                )}
-
-                <div className="text-sm text-slate-400 italic flex items-center gap-2">
-                  <span className="text-xl" aria-hidden="true">
-                    🔊
-                  </span>
-                  <span>
-                    {result.visible
-                      ? "Listen to the beeping frequency - faster beeps mean you're getting closer!"
-                      : itemLocation
-                        ? "Follow the navigation guidance to find the item again"
-                        : "Move your camera around to search for the object"}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Instructions */}
-          {!isScanning && (
-            <div className="bg-slate-800/30 backdrop-blur-sm rounded-2xl p-8 border border-slate-700/30">
-              <h2 className="text-2xl font-semibold mb-4 text-slate-200">
-                How it works
-              </h2>
-              <ol className="space-y-3 text-slate-300 list-decimal list-inside">
-                <li className="pl-2">
-                  <strong className="text-slate-100">Describe</strong> what
-                  you're looking for in the search box
-                </li>
-                <li className="pl-2">
-                  <strong className="text-slate-100">Start scanning</strong> to
-                  activate the camera
-                </li>
-                <li className="pl-2">
-                  <strong className="text-slate-100">Point</strong> your camera
-                  around the area
-                </li>
-                <li className="pl-2">
-                  <strong className="text-slate-100">Listen</strong> to the
-                  beeping:
-                  <ul className="ml-8 mt-2 space-y-1 text-sm text-slate-400 list-disc">
-                    <li>Faster beeps = object is closer or more visible</li>
-                    <li>Higher pitch = higher confidence in detection</li>
-                    <li>No beeps = object not found yet</li>
-                  </ul>
-                </li>
-                <li className="pl-2">
-                  <strong className="text-slate-100">Voice feedback</strong>{" "}
-                  will announce when object is found
-                </li>
-                <li className="pl-2">
-                  <strong className="text-slate-100 text-purple-300">
-                    🆕 Find Again:
-                  </strong>{" "}
-                  When an item is detected, its location is automatically saved.
-                  If you look away, follow the directional guidance to find it
-                  again!
-                </li>
-              </ol>
-            </div>
-          )}
         </div>
-
-        <footer className="mt-12 text-center text-slate-500 text-sm">
-          <p>Powered by Overshoot Vision AI</p>
-          <p className="mt-2">
-            This tool uses your device camera, audio, and orientation sensors.
-            All processing is secure.
-          </p>
-        </footer>
-      </div>
+      )}
     </div>
   );
 }
