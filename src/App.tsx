@@ -19,28 +19,24 @@ export default function App() {
     searchQueryRef.current = searchQuery;
   }, [searchQuery]);
 
+  // Initialize speech synthesis on mount (iOS fix)
+  useEffect(() => {
+    if ("speechSynthesis" in window) {
+      // Wake up iOS speech synthesis
+      const utterance = new SpeechSynthesisUtterance("");
+      utterance.volume = 0;
+      window.speechSynthesis.speak(utterance);
+    }
+  }, []);
+
   // Memoized callbacks to prevent infinite loops
   const handleFound = useCallback((result: any) => {
     console.log("✨ Item found callback");
 
-    // Play wooden found sound
-    audioService.current.playSound({
-      type: "found",
-      frequency: 220,
-      duration: 0.4,
-      volume: 0.15,
-      filter: {
-        type: "lowpass",
-        frequency: 800,
-        Q: 1,
-      },
-    });
-
     // Announce finding
-    const announcement = `Found! ${result.distance || ""}`;
     audioService.current.speak({
-      text: announcement,
-      rate: 1.4,
+      text: "Found",
+      rate: 1.3,
     });
 
     // Mark location for navigation (using ref to avoid dependency)
@@ -51,31 +47,25 @@ export default function App() {
 
   const handleDistanceChanged = useCallback((distance: string) => {
     console.log("📏 Distance changed callback:", distance);
-    audioService.current.speak({
-      text: distance,
-      rate: 1.4,
-    });
+    // No announcement for distance changes
   }, []);
 
   const handleLost = useCallback(() => {
     console.log("👋 Item lost callback");
-    // Silently lost - no announcement per requirements
+    audioService.current.speak({
+      text: "Lost",
+      rate: 1.3,
+    });
   }, []);
 
   const handleGuidanceChange = useCallback((guidance: any) => {
     console.log("🧭 Guidance changed:", guidance.text);
-    audioService.current.speak({
-      text: guidance.text,
-      rate: 1.3,
-    });
+    // No voice guidance during navigation
   }, []);
 
   const handleLocationMarked = useCallback(() => {
     console.log("📍 Location marked");
-    audioService.current.speak({
-      text: "Location saved",
-      rate: 1.3,
-    });
+    // No announcement for location marked
   }, []);
 
   // Finder hook - manages vision detection
@@ -167,6 +157,13 @@ export default function App() {
       return;
     }
 
+    // ✅ iOS FIX: Speak FIRST - directly in user gesture handler
+    // This must happen before any async operations for iOS
+    audioService.current.speak({
+      text: `Searching for ${searchQuery}`,
+      rate: 1.2,
+    });
+
     // Resume audio context (required on mobile)
     await audioService.current.resume();
 
@@ -178,12 +175,6 @@ export default function App() {
     // Start finder
     await finder.startScanning({
       searchQuery,
-    });
-
-    // Announce start
-    audioService.current.speak({
-      text: `Scanning for ${searchQuery}`,
-      rate: 1.2,
     });
   };
 
@@ -197,7 +188,7 @@ export default function App() {
     }
 
     audioService.current.speak({
-      text: "Scanning stopped",
+      text: "Searching stopped",
       rate: 1.2,
     });
   };
@@ -210,10 +201,38 @@ export default function App() {
     });
   };
 
+  const handleTestAudio = async () => {
+    await audioService.current.resume();
+    audioService.current.speak({
+      text: "Audio is working",
+      rate: 1.2,
+    });
+  };
+
   const videoRef = finder.getVideoRef();
 
+  // Calculate arrow rotation based on navigation guidance
+  const getArrowRotation = () => {
+    if (!navigation.guidance.direction) return 0;
+
+    switch (navigation.guidance.direction) {
+      case "left":
+        return -90;
+      case "slight left":
+        return -45;
+      case "right":
+        return 90;
+      case "slight right":
+        return 45;
+      case "center":
+        return 0;
+      default:
+        return 0;
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black overflow-hidden">
+    <div className="fixed inset-0 bg-neutral-950 overflow-hidden">
       {/* Screen reader announcements */}
       <div
         className="sr-only"
@@ -227,21 +246,23 @@ export default function App() {
 
       {!finder.state.isScanning ? (
         // Setup screen
-        <div className="h-full flex flex-col p-6 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+        <div className="h-full flex flex-col p-6">
           <div className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full">
-            <div className="text-center mb-12">
-              <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+            <div className="text-center mb-16">
+              <h1 className="text-5xl font-light mb-2 text-neutral-100 tracking-tight">
                 Vision Scanner
               </h1>
-              <p className="text-slate-400">Audio-guided object finding</p>
+              <p className="text-neutral-500 text-sm">
+                Audio-guided object finding
+              </p>
             </div>
 
             {availableDevices.length > 1 && (
-              <div className="mb-6">
+              <div className="mb-4">
                 <select
                   value={selectedDeviceId}
                   onChange={(e) => setSelectedDeviceId(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-800 border-2 border-slate-600 rounded-xl text-slate-100 focus:border-cyan-500 focus:outline-none"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-neutral-800 rounded text-neutral-100 focus:border-neutral-600 focus:outline-none"
                 >
                   {availableDevices.map((device) => (
                     <option key={device.deviceId} value={device.deviceId}>
@@ -267,30 +288,38 @@ export default function App() {
                   handleStartScanning()
                 }
                 placeholder="What are you looking for?"
-                className="w-full px-6 py-4 bg-slate-800 border-2 border-slate-600 rounded-xl text-lg text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none"
+                className="w-full px-4 py-4 bg-neutral-900 border border-neutral-800 rounded text-lg text-neutral-100 placeholder-neutral-600 focus:border-neutral-600 focus:outline-none"
               />
-              <p className="text-xs text-slate-500 mt-2 text-center">
+              <p className="text-xs text-neutral-600 mt-2 text-center">
                 e.g., door, keys, water bottle
               </p>
             </div>
 
             {finder.state.error && (
-              <div className="mb-6 bg-red-900/30 border-2 border-red-600 rounded-xl p-4 text-red-200 text-sm">
+              <div className="mb-6 bg-red-950 border border-red-900 rounded p-4 text-red-400 text-sm">
                 {finder.state.error}
               </div>
             )}
 
+            {/* Test Audio Button (iOS) */}
+            <button
+              onClick={handleTestAudio}
+              className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-100 font-medium py-3 px-8 rounded text-base transition-colors mb-3"
+            >
+              Test Audio
+            </button>
+
             <button
               onClick={handleStartScanning}
               disabled={!searchQuery.trim()}
-              className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-semibold py-5 px-8 rounded-xl shadow-lg text-lg disabled:opacity-50"
+              className="w-full bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-800 text-neutral-950 disabled:text-neutral-600 font-medium py-4 px-8 rounded text-lg transition-colors"
             >
-              🔍 Start Scanning
+              Start Scanning
             </button>
 
             {navigation.needsPermission && (
-              <p className="text-xs text-slate-500 mt-4 text-center">
-                📱 You'll be asked for orientation permission on iOS
+              <p className="text-xs text-neutral-600 mt-4 text-center">
+                You'll be asked for orientation permission on iOS
               </p>
             )}
           </div>
@@ -307,57 +336,60 @@ export default function App() {
             className="absolute inset-0 w-full h-full object-cover"
           />
 
-          {/* Directional glow - left */}
-          {navigation.guidance.glowSide === "left" &&
-            !finder.state.result?.visible && (
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute left-0 top-0 bottom-0 w-1/2 bg-gradient-to-r from-purple-500/40 to-transparent animate-pulse" />
+          {/* Navigation arrow */}
+          {navigation.isNavigating && !finder.state.result?.visible && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div
+                className="transition-transform duration-300"
+                style={{
+                  transform: `rotate(${getArrowRotation()}deg)`,
+                }}
+              >
+                <svg
+                  width="80"
+                  height="80"
+                  viewBox="0 0 80 80"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="drop-shadow-lg"
+                >
+                  <path
+                    d="M40 10 L40 55 M40 55 L25 40 M40 55 L55 40"
+                    stroke="white"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </div>
-            )}
+            </div>
+          )}
 
-          {/* Directional glow - right */}
-          {navigation.guidance.glowSide === "right" &&
-            !finder.state.result?.visible && (
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute right-0 top-0 bottom-0 w-1/2 bg-gradient-to-l from-purple-500/40 to-transparent animate-pulse" />
-              </div>
-            )}
-
-          {/* Center glow - on target */}
-          {navigation.guidance.glowSide === "center" &&
-            !finder.state.result?.visible && (
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute inset-0 bg-purple-500/30 animate-pulse" />
-              </div>
-            )}
-
-          {/* Found state - green border glow */}
+          {/* Found state - simple border */}
           {finder.state.result?.visible && (
             <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute inset-0 border-8 border-green-500 animate-pulse shadow-[inset_0_0_60px_rgba(34,197,94,0.4)]" />
+              <div className="absolute inset-0 border-4 border-green-500" />
             </div>
           )}
 
           {/* Status indicator */}
           <div className="absolute top-4 left-1/2 -translate-x-1/2">
             <div
-              className={`px-4 py-2 rounded-full backdrop-blur-sm ${
+              className={`px-4 py-2 rounded backdrop-blur-sm ${
                 finder.state.result?.visible
-                  ? "bg-green-900/70 border border-green-500"
+                  ? "bg-green-950/80 border border-green-900"
                   : navigation.isNavigating
-                    ? "bg-purple-900/70 border border-purple-500"
-                    : "bg-slate-900/70 border border-slate-600"
+                    ? "bg-neutral-950/80 border border-neutral-800"
+                    : "bg-neutral-950/80 border border-neutral-800"
               }`}
             >
               <div className="flex items-center gap-2">
                 <div
                   className={`w-2 h-2 rounded-full ${
                     finder.state.result?.visible
-                      ? "bg-green-400"
-                      : navigation.isNavigating
-                        ? "bg-purple-400"
-                        : "bg-slate-400"
-                  } animate-pulse`}
+                      ? "bg-green-500"
+                      : "bg-neutral-500"
+                  }`}
                 />
                 <span className="text-white text-sm font-medium">
                   {finder.state.result?.visible
@@ -375,14 +407,14 @@ export default function App() {
             <div className="flex gap-3 justify-center">
               <button
                 onClick={handleStopScanning}
-                className="bg-red-600/90 hover:bg-red-500 backdrop-blur-sm text-white font-semibold py-4 px-8 rounded-full shadow-lg"
+                className="bg-red-600/90 hover:bg-red-500 backdrop-blur-sm text-white font-medium py-3 px-8 rounded transition-colors"
               >
                 Stop
               </button>
               {navigation.isNavigating && (
                 <button
                   onClick={handleClearLocation}
-                  className="bg-slate-700/90 hover:bg-slate-600 backdrop-blur-sm text-white font-semibold py-4 px-4 rounded-full shadow-lg"
+                  className="bg-neutral-800/90 hover:bg-neutral-700 backdrop-blur-sm text-white font-medium py-3 px-6 rounded transition-colors"
                 >
                   Clear
                 </button>

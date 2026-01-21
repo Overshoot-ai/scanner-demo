@@ -111,9 +111,9 @@ Be precise - only set visible=true if you're confident it's the correct object.`
         model: "Qwen/Qwen3-VL-30B-A3B-Instruct",
         processing: {
           fps: 30,
-          sampling_ratio: 1.0,
-          clip_length_seconds: 0.1,
-          delay_seconds: 0.1,
+          sampling_ratio: 0.6,
+          clip_length_seconds: 0.2,
+          delay_seconds: 0.2,
         },
         outputSchema: {
           type: "object",

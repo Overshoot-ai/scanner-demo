@@ -38,6 +38,19 @@ export class AudioService {
     this.audioContext = new (
       window.AudioContext || (window as any).webkitAudioContext
     )();
+
+    // iOS: Initialize speech synthesis
+    if ("speechSynthesis" in window) {
+      // Load voices (required on iOS)
+      window.speechSynthesis.getVoices();
+
+      // Listen for voices changed event (iOS specific)
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          window.speechSynthesis.getVoices();
+        };
+      }
+    }
   }
 
   /**
@@ -93,6 +106,13 @@ export class AudioService {
       const utterance = new SpeechSynthesisUtterance(request.text);
       utterance.rate = request.rate || 1.3;
 
+      // iOS: Set voice explicitly (helps with reliability)
+      const voices = window.speechSynthesis.getVoices();
+      const englishVoice = voices.find((v) => v.lang.startsWith("en"));
+      if (englishVoice) {
+        utterance.voice = englishVoice;
+      }
+
       utterance.onstart = () => {
         console.log("▶️ Speech started:", request.text);
       };
@@ -106,7 +126,21 @@ export class AudioService {
       utterance.onerror = (e) => {
         console.error("❌ Speech error:", e, request.text);
         this.isSpeaking = false;
-        reject(e);
+
+        // iOS specific: retry once on error
+        if (e.error === "canceled" || e.error === "interrupted") {
+          console.log("🔄 Retrying speech...");
+          setTimeout(() => {
+            try {
+              window.speechSynthesis.speak(utterance);
+            } catch (retryErr) {
+              console.error("❌ Retry failed:", retryErr);
+              reject(retryErr);
+            }
+          }, 100);
+        } else {
+          reject(e);
+        }
       };
 
       window.speechSynthesis.speak(utterance);
