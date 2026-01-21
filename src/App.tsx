@@ -13,6 +13,7 @@ export default function App() {
   const audioService = useRef(getAudioService());
   const beepStopRef = useRef<(() => void) | null>(null);
   const searchQueryRef = useRef(searchQuery);
+  const navigationRef = useRef<any>(null); // Add ref for navigation
 
   // Keep ref in sync
   useEffect(() => {
@@ -40,8 +41,15 @@ export default function App() {
     });
     audioService.current.playSound({ type: "found" });
 
-    if (result.confidence > 0.6 && searchQueryRef.current) {
-      navigation.markLocation(searchQueryRef.current, result.confidence);
+    if (
+      result.confidence > 0.6 &&
+      searchQueryRef.current &&
+      navigationRef.current
+    ) {
+      navigationRef.current.markLocation(
+        searchQueryRef.current,
+        result.confidence,
+      );
     }
   }, []);
 
@@ -99,6 +107,11 @@ export default function App() {
     onGuidanceChange: handleGuidanceChange,
     onLocationMarked: handleLocationMarked,
   });
+
+  // Keep navigationRef in sync
+  useEffect(() => {
+    navigationRef.current = navigation;
+  }, [navigation]);
 
   // Enumerate video devices
   useEffect(() => {
@@ -296,6 +309,49 @@ export default function App() {
             muted
             className="absolute inset-0 w-full h-full object-cover opacity-60"
           />
+
+          {/* Debug Info - Top Left */}
+          <div className="absolute top-4 left-4 bg-black/80 p-3 rounded text-xs font-mono pointer-events-none">
+            <div className="text-green-400">DEBUG MODE</div>
+            {navigation.itemLocation && (
+              <>
+                <div className="text-white mt-2">
+                  Target Heading: {navigation.itemLocation.heading.toFixed(1)}°
+                </div>
+                <div className="text-white">
+                  Current Heading:{" "}
+                  {navigation.getOrientation().heading?.toFixed(1) ?? "null"}°
+                </div>
+                <div className="text-yellow-400 mt-1">
+                  Diff:{" "}
+                  {(() => {
+                    const current = navigation.getOrientation().heading;
+                    if (current === null) return "null";
+                    let diff = navigation.itemLocation.heading - current;
+                    if (diff > 180) diff -= 360;
+                    if (diff < -180) diff += 360;
+                    return diff.toFixed(1);
+                  })()}
+                  °
+                </div>
+                <div className="text-gray-400 mt-2 text-[10px]">
+                  Beta: {navigation.getOrientation().beta?.toFixed(1) ?? "null"}
+                  ° / {navigation.itemLocation.beta.toFixed(1)}°
+                </div>
+                <div className="text-gray-400 text-[10px]">
+                  Gamma:{" "}
+                  {navigation.getOrientation().gamma?.toFixed(1) ?? "null"}° /{" "}
+                  {navigation.itemLocation.gamma.toFixed(1)}°
+                </div>
+              </>
+            )}
+            {!navigation.itemLocation && (
+              <div className="text-gray-500 mt-2">No location marked</div>
+            )}
+            <div className="text-cyan-400 mt-2">
+              Direction: {navigation.guidance.direction || "none"}
+            </div>
+          </div>
 
           {/* Navigation Overlay */}
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
