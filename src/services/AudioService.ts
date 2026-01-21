@@ -2,7 +2,7 @@
  * AudioService
  *
  * Manages all audio output including:
- * - Speech synthesis (voice announcements)
+ * - Speech synthesis via ElevenLabs (natural voice)
  * - Sound effects (beeps, clicks, tones)
  */
 
@@ -28,47 +28,24 @@ export class AudioService {
   private audioContext: AudioContext;
   private isSpeaking: boolean = false;
   private activeOscillators: OscillatorNode[] = [];
-  private voicesLoaded: boolean = false;
+  private elevenLabsApiKey: string;
+  private voiceId: string = "21m00Tcm4TlvDq8ikWAM"; // Rachel voice (fast, clear)
+  private audioQueue: HTMLAudioElement[] = [];
+  private isProcessingQueue: boolean = false;
 
   constructor() {
     const AudioContextClass =
       window.AudioContext || (window as any).webkitAudioContext;
     this.audioContext = new AudioContextClass();
 
-    // iOS: Initialize speech synthesis listeners
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.onvoiceschanged = () => {
-        this.voicesLoaded = true;
-      };
-      // Trigger load immediately
-      window.speechSynthesis.getVoices();
-    }
-  }
+    // Get ElevenLabs API key from environment
+    this.elevenLabsApiKey = import.meta.env.VITE_ELEVENLABS_API_KEY || "";
 
-  /**
-   * Helper to ensure voices are loaded before speaking
-   */
-  private async waitForVoices(): Promise<SpeechSynthesisVoice[]> {
-    if ("speechSynthesis" in window) {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) return voices;
-
-      return new Promise((resolve) => {
-        const check = setInterval(() => {
-          const v = window.speechSynthesis.getVoices();
-          if (v.length > 0) {
-            clearInterval(check);
-            resolve(v);
-          }
-        }, 100);
-        // Timeout after 1s and return empty
-        setTimeout(() => {
-          clearInterval(check);
-          resolve([]);
-        }, 1000);
-      });
+    if (!this.elevenLabsApiKey) {
+      console.warn(
+        "⚠️ ElevenLabs API key not found. Add VITE_ELEVENLABS_API_KEY to .env",
+      );
     }
-    return [];
   }
 
   /**
@@ -89,73 +66,112 @@ export class AudioService {
     } catch (e) {
       console.error("Audio unlock failed", e);
     }
-
-    // Unlock Speech Synthesis (iOS requires this in user gesture)
-    if ("speechSynthesis" in window) {
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-    }
   }
 
   /**
-   * Speak text using speech synthesis
+   * Speak text using ElevenLabs API (optimized for speed)
    */
   async speak(request: SpeechRequest): Promise<void> {
-    if (!("speechSynthesis" in window)) return;
-
-    // Ensure voices are ready
-    const voices = await this.waitForVoices();
-
-    // Handle priority
-    if (request.priority === "high") {
-      window.speechSynthesis.cancel();
-      this.isSpeaking = false;
-    } else if (window.speechSynthesis.speaking) {
-      // If normal priority and already speaking, simple queue logic:
-      // In a real app, you might want a proper array queue.
-      // For navigation, we usually just want to skip if busy to avoid lag.
+    if (!this.elevenLabsApiKey) {
+      console.warn("⚠️ No ElevenLabs API key - speech disabled");
       return;
     }
 
-    this.isSpeaking = true;
-    const utterance = new SpeechSynthesisUtterance(request.text);
-    utterance.rate = request.rate || 1.1; // Slightly slower is clearer for directions
-    utterance.volume = 1.0;
-
-    // Robust Voice Selection
-    // 1. Look for "Daniel" (great iOS voice)
-    // 2. Look for "Google US English" (great Android voice)
-    // 3. Fallback to first English voice
-    const preferredVoice =
-      voices.find((v) => v.name.includes("Daniel")) ||
-      voices.find((v) => v.name.includes("Google US English")) ||
-      voices.find((v) => v.lang.startsWith("en"));
-
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
+    // Handle priority
+    if (request.priority === "high") {
+      this.stopSpeech();
+    } else if (this.isSpeaking) {
+      return; // Skip if already speaking to avoid lag
     }
 
-    utterance.onend = () => {
-      this.isSpeaking = false;
-    };
+    try {
+      this.isSpeaking = true;
 
-    utterance.onerror = (e) => {
-      console.error("Speech error", e);
-      this.isSpeaking = false;
-      // Force reset on error
-      window.speechSynthesis.cancel();
-    };
+      // Use turbo model for fastest synthesis
+      // stability: 0.5 = balanced
+      // similarity_boost: 0.75 = clear but fast
+      const response = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream?optimize_streaming_latency=4`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": this.elevenLabsApiKey,
+          },
+          body: JSON.stringify({
+            text: request.text,
+            model_id: "eleven_turbo_v2_5", // Fastest model
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75,
+              speed: request.rate || 1.2, // Slightly faster for quick feedback
+            },
+          }),
+        },
+      );
 
-    window.speechSynthesis.speak(utterance);
+      if (!response.ok) {
+        throw new Error(`ElevenLabs API error: ${response.status}`);
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new HTMLAudioElement(audioUrl);
+
+      audio.onended = () => {
+        this.isSpeaking = false;
+        URL.revokeObjectURL(audioUrl);
+        this.processQueue();
+      };
+
+      audio.onerror = (e) => {
+        console.error("Audio playback error", e);
+        this.isSpeaking = false;
+        URL.revokeObjectURL(audioUrl);
+        this.processQueue();
+      };
+
+      await audio.play();
+    } catch (error) {
+      console.error("ElevenLabs speech error:", error);
+      this.isSpeaking = false;
+    }
   }
 
   /**
-   * Play a sound effect
+   * Process queued audio
+   */
+  private async processQueue() {
+    if (this.isProcessingQueue || this.audioQueue.length === 0) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+    const audio = this.audioQueue.shift()!;
+
+    audio.onended = () => {
+      this.isProcessingQueue = false;
+      this.processQueue();
+    };
+
+    audio.onerror = () => {
+      this.isProcessingQueue = false;
+      this.processQueue();
+    };
+
+    await audio.play();
+  }
+
+  /**
+   * Play a sound effect (improved beeps)
    */
   playSound(effect: SoundEffect): void {
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
+
+    // Use triangle wave for softer, less annoying beeps
+    oscillator.type = effect.type === "found" ? "sine" : "triangle";
 
     if (effect.filter) {
       const filter = this.audioContext.createBiquadFilter();
@@ -174,7 +190,6 @@ export class AudioService {
 
     gainNode.connect(this.audioContext.destination);
 
-    oscillator.type = "sine";
     const frequency = effect.frequency || this.getDefaultFrequency(effect.type);
     oscillator.frequency.setValueAtTime(
       frequency,
@@ -198,13 +213,14 @@ export class AudioService {
   }
 
   /**
-   * Continuous beep for proximity (Mobile Optimized)
+   * Continuous beep for proximity (Less frequent, softer)
    */
   startContinuousBeep(baseFrequency: number, beepRate: number): () => void {
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
 
-    oscillator.type = "sine";
+    // Use triangle wave for softer sound
+    oscillator.type = "triangle";
     oscillator.frequency.setValueAtTime(
       baseFrequency,
       this.audioContext.currentTime,
@@ -222,13 +238,16 @@ export class AudioService {
       const now = this.audioContext.currentTime;
       gainNode.gain.cancelScheduledValues(now);
       gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(0.3, now + 0.02);
-      gainNode.gain.setValueAtTime(0.3, now + 0.08);
+      // Softer attack and decay
+      gainNode.gain.linearRampToValueAtTime(0.15, now + 0.03); // Lower volume
+      gainNode.gain.setValueAtTime(0.15, now + 0.06);
       gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
     };
 
     scheduleBeep();
-    const interval = setInterval(scheduleBeep, beepRate * 1000);
+    // Make beeps less frequent - multiply rate by 1.5
+    const adjustedRate = Math.max(beepRate * 1.5, 0.3); // Minimum 300ms between beeps
+    const interval = setInterval(scheduleBeep, adjustedRate * 1000);
 
     return () => {
       clearInterval(interval);
@@ -259,10 +278,9 @@ export class AudioService {
   }
 
   stopSpeech() {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-      this.isSpeaking = false;
-    }
+    this.isSpeaking = false;
+    this.audioQueue = [];
+    this.isProcessingQueue = false;
   }
 
   stopAll() {
@@ -277,20 +295,20 @@ export class AudioService {
       case "found":
         return 523.25; // C5 (High chime)
       case "click":
-        return 800;
+        return 600; // Lower, softer
       case "beep":
-        return 440;
+        return 350; // Much lower, less harsh
       default:
-        return 440;
+        return 350;
     }
   }
 
   private getDefaultDuration(type: string): number {
-    return type === "found" ? 0.6 : 0.1;
+    return type === "found" ? 0.4 : 0.08; // Shorter beeps
   }
 
   private getDefaultVolume(type: string): number {
-    return type === "found" ? 0.4 : 0.2;
+    return type === "found" ? 0.3 : 0.15; // Lower volume
   }
 
   private applyEnvelope(
@@ -306,9 +324,10 @@ export class AudioService {
       gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.02);
       gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
     } else {
+      // Softer envelope for beeps
       gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.01);
-      gainNode.gain.setValueAtTime(volume, startTime + duration - 0.01);
+      gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.015);
+      gainNode.gain.setValueAtTime(volume, startTime + duration - 0.015);
       gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
     }
   }

@@ -38,7 +38,7 @@ export default function App() {
     console.log("✨ Item found callback");
     audioService.current.speak({
       text: "Found it",
-      rate: 1.3,
+      rate: 1.2,
       priority: "high",
     });
     audioService.current.playSound({ type: "found" });
