@@ -52,36 +52,32 @@ export default function App() {
 
   const handleLost = useCallback(() => {
     console.log("👋 Item lost callback");
-    audioService.current.speak({
-      text: "Lost visual. Rotate to find it.",
-      rate: 1.2,
-      priority: "high", // Interrupt existing speech
-    });
+    // Don't announce "lost" - navigation will automatically provide directional guidance
+    // The location is still marked, so navigation.guidance will update with directions
   }, []);
 
-  // ✅ ENABLED: Navigation Guidance Audio
+  // ✅ Navigation guidance - provides directions when navigating back to lost item
   const handleGuidanceChange = useCallback((guidance: any) => {
     console.log("🧭 Guidance changed:", guidance.text);
     if (guidance.text) {
-      // Directions: "Left", "Slight Right", "Tilt Up"
+      // Directions: "Left", "Slight Right", "Right here", "Tilt up/down"
       audioService.current.speak({
         text: guidance.text,
-        rate: 1.2, // Slightly faster for directions
-        priority: "high", // Directions should be immediate
+        rate: 1.2,
+        priority: "high", // Directions should interrupt other speech
       });
     }
   }, []);
 
-  // ✅ ENABLED: Location Locked Sound
+  // ✅ Location locked feedback
   const handleLocationMarked = useCallback(() => {
     console.log("📍 Location marked");
-    // Play a distinct "Lock on" sound
+    // Play a distinct "Lock on" sound (double beep)
     audioService.current.playSound({
       type: "found",
       frequency: 660, // E5
       duration: 0.1,
     });
-    // Double beep
     setTimeout(() => {
       audioService.current.playSound({
         type: "found",
@@ -303,7 +299,7 @@ export default function App() {
 
           {/* Navigation Overlay */}
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            {/* If Navigating back to item */}
+            {/* If Navigating back to item (location marked but not visible) */}
             {navigation.isNavigating && !finder.state.result?.visible && (
               <div className="text-center">
                 <div
