@@ -34,6 +34,7 @@ export interface NavigationGuidance {
 export interface NavigationCallbacks {
   onGuidanceChange: (guidance: NavigationGuidance) => void;
   onLocationMarked: () => void;
+  isObjectVisible?: () => boolean; // Function to check if object is currently visible
 }
 
 export function useNavigation(callbacks?: NavigationCallbacks) {
@@ -239,8 +240,11 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
       const now = Date.now();
       const timeSinceLastGuidance = now - lastGuidanceTimeRef.current;
 
-      // Always announce if enough time has passed (removed the "only on change" logic)
-      if (timeSinceLastGuidance > GUIDANCE_COOLDOWN_MS) {
+      // Check if object is visible - if so, don't announce guidance
+      const isVisible = callbacksRef.current.isObjectVisible?.() ?? false;
+
+      // Only announce if enough time has passed AND object is NOT visible
+      if (timeSinceLastGuidance > GUIDANCE_COOLDOWN_MS && !isVisible) {
         callbacksRef.current.onGuidanceChange(newGuidance);
         lastGuidanceRef.current = newGuidance.text;
         lastGuidanceTimeRef.current = now;

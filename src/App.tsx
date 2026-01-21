@@ -9,11 +9,13 @@ export default function App() {
     [],
   );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [debugMode, setDebugMode] = useState(false);
 
   const audioService = useRef(getAudioService());
   const beepStopRef = useRef<(() => void) | null>(null);
   const searchQueryRef = useRef(searchQuery);
-  const navigationRef = useRef<any>(null); // Add ref for navigation
+  const navigationRef = useRef<any>(null);
+  const finderRef = useRef<any>(null);
 
   // Keep ref in sync
   useEffect(() => {
@@ -60,8 +62,23 @@ export default function App() {
 
   const handleLost = useCallback(() => {
     console.log("👋 Item lost callback");
-    // Don't announce "lost" - navigation will automatically provide directional guidance
-    // The location is still marked, so navigation.guidance will update with directions
+
+    // Only announce "lost" and clear location if we're at the target (guidance says "center")
+    // This means we returned to where the object was, but it's not there anymore
+    if (
+      navigationRef.current?.isNavigating &&
+      navigationRef.current?.guidance.direction === "center"
+    ) {
+      // User is at the marked location, but object isn't there
+      // Clear the location and announce "lost"
+      navigationRef.current.clearLocation();
+      audioService.current.speak({
+        text: "Lost",
+        rate: 1.2,
+        priority: "high",
+      });
+    }
+    // Otherwise, just lost sight - navigation will continue providing directions
   }, []);
 
   // ✅ Navigation guidance - provides directions when navigating back to lost item
@@ -69,6 +86,7 @@ export default function App() {
     console.log("🧭 Guidance changed:", guidance.text);
     if (guidance.text) {
       // Directions: "Left", "Slight Right", "Right here", "Tilt up/down"
+      // The navigation hook already checks isObjectVisible, so we just speak
       audioService.current.speak({
         text: guidance.text,
         rate: 1.2,
@@ -95,17 +113,23 @@ export default function App() {
     }, 150);
   }, []);
 
-  // Finder hook - manages vision detection
+  // Finder hook - manages vision detection (CREATE THIS FIRST)
   const finder = useFinder({
     onFound: handleFound,
     onDistanceChanged: handleDistanceChanged,
     onLost: handleLost,
   });
 
-  // Navigation hook - manages return to item
+  // Keep finderRef in sync
+  useEffect(() => {
+    finderRef.current = finder;
+  }, [finder]);
+
+  // Navigation hook - manages return to item (CREATE THIS AFTER FINDER)
   const navigation = useNavigation({
     onGuidanceChange: handleGuidanceChange,
     onLocationMarked: handleLocationMarked,
+    isObjectVisible: () => finderRef.current?.state.result?.visible ?? false,
   });
 
   // Keep navigationRef in sync
@@ -202,6 +226,12 @@ export default function App() {
       beepStopRef.current();
       beepStopRef.current = null;
     }
+
+    // Clear navigation location when stopping
+    if (navigationRef.current) {
+      navigationRef.current.clearLocation();
+    }
+
     audioService.current.stopAll(); // Stop any pending speech
     audioService.current.speak({ text: "Stopped" });
   };
@@ -310,48 +340,60 @@ export default function App() {
             className="absolute inset-0 w-full h-full object-cover opacity-60"
           />
 
-          {/* Debug Info - Top Left */}
-          <div className="absolute top-4 left-4 bg-black/80 p-3 rounded text-xs font-mono pointer-events-none">
-            <div className="text-green-400">DEBUG MODE</div>
-            {navigation.itemLocation && (
-              <>
-                <div className="text-white mt-2">
-                  Target Heading: {navigation.itemLocation.heading.toFixed(1)}°
-                </div>
-                <div className="text-white">
-                  Current Heading:{" "}
-                  {navigation.getOrientation().heading?.toFixed(1) ?? "null"}°
-                </div>
-                <div className="text-yellow-400 mt-1">
-                  Diff:{" "}
-                  {(() => {
-                    const current = navigation.getOrientation().heading;
-                    if (current === null) return "null";
-                    let diff = navigation.itemLocation.heading - current;
-                    if (diff > 180) diff -= 360;
-                    if (diff < -180) diff += 360;
-                    return diff.toFixed(1);
-                  })()}
-                  °
-                </div>
-                <div className="text-gray-400 mt-2 text-[10px]">
-                  Beta: {navigation.getOrientation().beta?.toFixed(1) ?? "null"}
-                  ° / {navigation.itemLocation.beta.toFixed(1)}°
-                </div>
-                <div className="text-gray-400 text-[10px]">
-                  Gamma:{" "}
-                  {navigation.getOrientation().gamma?.toFixed(1) ?? "null"}° /{" "}
-                  {navigation.itemLocation.gamma.toFixed(1)}°
-                </div>
-              </>
-            )}
-            {!navigation.itemLocation && (
-              <div className="text-gray-500 mt-2">No location marked</div>
-            )}
-            <div className="text-cyan-400 mt-2">
-              Direction: {navigation.guidance.direction || "none"}
+          {/* Debug Info - Top Left (Toggleable) */}
+          {debugMode && (
+            <div className="absolute top-4 left-4 bg-black/80 p-3 rounded text-xs font-mono pointer-events-none">
+              <div className="text-green-400">DEBUG MODE</div>
+              {navigation.itemLocation && (
+                <>
+                  <div className="text-white mt-2">
+                    Target Heading: {navigation.itemLocation.heading.toFixed(1)}
+                    °
+                  </div>
+                  <div className="text-white">
+                    Current Heading:{" "}
+                    {navigation.getOrientation().heading?.toFixed(1) ?? "null"}°
+                  </div>
+                  <div className="text-yellow-400 mt-1">
+                    Diff:{" "}
+                    {(() => {
+                      const current = navigation.getOrientation().heading;
+                      if (current === null) return "null";
+                      let diff = navigation.itemLocation.heading - current;
+                      if (diff > 180) diff -= 360;
+                      if (diff < -180) diff += 360;
+                      return diff.toFixed(1);
+                    })()}
+                    °
+                  </div>
+                  <div className="text-gray-400 mt-2 text-[10px]">
+                    Beta:{" "}
+                    {navigation.getOrientation().beta?.toFixed(1) ?? "null"}° /{" "}
+                    {navigation.itemLocation.beta.toFixed(1)}°
+                  </div>
+                  <div className="text-gray-400 text-[10px]">
+                    Gamma:{" "}
+                    {navigation.getOrientation().gamma?.toFixed(1) ?? "null"}° /{" "}
+                    {navigation.itemLocation.gamma.toFixed(1)}°
+                  </div>
+                </>
+              )}
+              {!navigation.itemLocation && (
+                <div className="text-gray-500 mt-2">No location marked</div>
+              )}
+              <div className="text-cyan-400 mt-2">
+                Direction: {navigation.guidance.direction || "none"}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Debug Toggle Button - Top Right */}
+          <button
+            onClick={() => setDebugMode(!debugMode)}
+            className="absolute top-4 right-4 bg-black/80 px-3 py-2 rounded text-xs font-mono text-gray-400 hover:text-white"
+          >
+            {debugMode ? "Hide Debug" : "Show Debug"}
+          </button>
 
           {/* Navigation Overlay */}
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
@@ -362,7 +404,7 @@ export default function App() {
                   style={{ transform: `rotate(${getArrowRotation()}deg)` }}
                   className="transition-transform duration-300 inline-block mb-4"
                 >
-                  <span className="text-6xl">⬆️</span>
+                  <div className="text-6xl">↑</div>
                 </div>
                 <div className="text-3xl font-bold drop-shadow-md">
                   {navigation.guidance.text || "Scanning..."}
