@@ -4,11 +4,6 @@
  * Manages all audio output including:
  * - Speech synthesis (voice announcements)
  * - Sound effects (beeps, clicks, tones)
- *
- * Rules:
- * - Two speech announcements cannot play concurrently (queued or cancelled)
- * - Sound effects can play concurrently with speech
- * - Multiple sound effects can overlap
  */
 
 type SpeechRequest = {
@@ -33,141 +28,135 @@ export class AudioService {
   private audioContext: AudioContext;
   private isSpeaking: boolean = false;
   private activeOscillators: OscillatorNode[] = [];
+  private voicesLoaded: boolean = false;
 
   constructor() {
     const AudioContextClass =
       window.AudioContext || (window as any).webkitAudioContext;
     this.audioContext = new AudioContextClass();
 
-    // iOS: Initialize speech synthesis
+    // iOS: Initialize speech synthesis listeners
     if ("speechSynthesis" in window) {
-      // Load voices (required on iOS)
+      window.speechSynthesis.onvoiceschanged = () => {
+        this.voicesLoaded = true;
+      };
+      // Trigger load immediately
       window.speechSynthesis.getVoices();
-
-      // Listen for voices changed event (iOS specific)
-      if (window.speechSynthesis.onvoiceschanged !== undefined) {
-        window.speechSynthesis.onvoiceschanged = () => {
-          window.speechSynthesis.getVoices();
-        };
-      }
     }
   }
 
   /**
-   * Resume audio context (required after user interaction on mobile)
+   * Helper to ensure voices are loaded before speaking
+   */
+  private async waitForVoices(): Promise<SpeechSynthesisVoice[]> {
+    if ("speechSynthesis" in window) {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) return voices;
+
+      return new Promise((resolve) => {
+        const check = setInterval(() => {
+          const v = window.speechSynthesis.getVoices();
+          if (v.length > 0) {
+            clearInterval(check);
+            resolve(v);
+          }
+        }, 100);
+        // Timeout after 1s and return empty
+        setTimeout(() => {
+          clearInterval(check);
+          resolve([]);
+        }, 1000);
+      });
+    }
+    return [];
+  }
+
+  /**
+   * Resume audio context
    */
   async resume() {
-    // 1. Check strict suspension state
     if (this.audioContext.state === "suspended") {
       await this.audioContext.resume();
     }
 
-    // 2. iOS Safari Trick: Play a silent buffer to physically unlock the audio thread
-    // This is often required even if state says 'running'
+    // Unlock Web Audio
     try {
       const buffer = this.audioContext.createBuffer(1, 1, 22050);
       const source = this.audioContext.createBufferSource();
       source.buffer = buffer;
       source.connect(this.audioContext.destination);
       source.start(0);
-      console.log("🔊 Audio context resumed & unlocked");
     } catch (e) {
       console.error("Audio unlock failed", e);
+    }
+
+    // Unlock Speech Synthesis (iOS requires this in user gesture)
+    if ("speechSynthesis" in window) {
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
     }
   }
 
   /**
-   * Get current audio context state
-   */
-  getState() {
-    return {
-      contextState: this.audioContext.state,
-      isSpeaking: this.isSpeaking,
-    };
-  }
-
-  /**
    * Speak text using speech synthesis
-   * Returns a promise that resolves when speech completes
    */
-  speak(request: SpeechRequest): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!("speechSynthesis" in window)) {
-        console.error("❌ Speech synthesis not available");
-        reject(new Error("Speech synthesis not supported"));
-        return;
-      }
+  async speak(request: SpeechRequest): Promise<void> {
+    if (!("speechSynthesis" in window)) return;
 
-      // Handle priority
-      if (request.priority === "high" && this.isSpeaking) {
-        console.log("⚠️ High priority speech, cancelling current");
-        window.speechSynthesis.cancel();
-        this.isSpeaking = false;
-      }
+    // Ensure voices are ready
+    const voices = await this.waitForVoices();
 
-      // Wait if already speaking (normal priority)
-      if (this.isSpeaking && request.priority !== "high") {
-        console.log("⏸️ Speech queued:", request.text);
-        // Could implement a queue here, for now just skip
-        resolve();
-        return;
-      }
+    // Handle priority
+    if (request.priority === "high") {
+      window.speechSynthesis.cancel();
+      this.isSpeaking = false;
+    } else if (window.speechSynthesis.speaking) {
+      // If normal priority and already speaking, simple queue logic:
+      // In a real app, you might want a proper array queue.
+      // For navigation, we usually just want to skip if busy to avoid lag.
+      return;
+    }
 
-      console.log("🎤 Speaking:", request.text);
-      this.isSpeaking = true;
+    this.isSpeaking = true;
+    const utterance = new SpeechSynthesisUtterance(request.text);
+    utterance.rate = request.rate || 1.1; // Slightly slower is clearer for directions
+    utterance.volume = 1.0;
 
-      const utterance = new SpeechSynthesisUtterance(request.text);
-      utterance.rate = request.rate || 1.3;
+    // Robust Voice Selection
+    // 1. Look for "Daniel" (great iOS voice)
+    // 2. Look for "Google US English" (great Android voice)
+    // 3. Fallback to first English voice
+    const preferredVoice =
+      voices.find((v) => v.name.includes("Daniel")) ||
+      voices.find((v) => v.name.includes("Google US English")) ||
+      voices.find((v) => v.lang.startsWith("en"));
 
-      // iOS: Set voice explicitly (helps with reliability)
-      const voices = window.speechSynthesis.getVoices();
-      const englishVoice = voices.find((v) => v.lang.startsWith("en"));
-      if (englishVoice) {
-        utterance.voice = englishVoice;
-      }
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
 
-      utterance.onstart = () => {
-        console.log("▶️ Speech started:", request.text);
-      };
+    utterance.onend = () => {
+      this.isSpeaking = false;
+    };
 
-      utterance.onend = () => {
-        console.log("✅ Speech ended:", request.text);
-        this.isSpeaking = false;
-        resolve();
-      };
+    utterance.onerror = (e) => {
+      console.error("Speech error", e);
+      this.isSpeaking = false;
+      // Force reset on error
+      window.speechSynthesis.cancel();
+    };
 
-      utterance.onerror = (e) => {
-        console.error("❌ Speech error:", e, request.text);
-        this.isSpeaking = false;
-
-        // iOS specific: retry once on error
-        if (e.error === "canceled" || e.error === "interrupted") {
-          console.log("🔄 Retrying speech...");
-          setTimeout(() => {
-            try {
-              window.speechSynthesis.speak(utterance);
-            } catch (retryErr) {
-              console.error("❌ Retry failed:", retryErr);
-              reject(retryErr);
-            }
-          }, 100);
-        } else {
-          reject(e);
-        }
-      };
-
-      window.speechSynthesis.speak(utterance);
-    });
+    window.speechSynthesis.speak(utterance);
   }
 
   /**
-   * Play a sound effect (can play concurrently with speech and other sounds)
+   * Play a sound effect
    */
   playSound(effect: SoundEffect): void {
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
 
-    // Apply filter if specified
     if (effect.filter) {
       const filter = this.audioContext.createBiquadFilter();
       filter.type = effect.filter.type;
@@ -175,9 +164,8 @@ export class AudioService {
         effect.filter.frequency,
         this.audioContext.currentTime,
       );
-      if (effect.filter.Q) {
+      if (effect.filter.Q)
         filter.Q.setValueAtTime(effect.filter.Q, this.audioContext.currentTime);
-      }
       oscillator.connect(filter);
       filter.connect(gainNode);
     } else {
@@ -186,7 +174,6 @@ export class AudioService {
 
     gainNode.connect(this.audioContext.destination);
 
-    // Configure oscillator
     oscillator.type = "sine";
     const frequency = effect.frequency || this.getDefaultFrequency(effect.type);
     oscillator.frequency.setValueAtTime(
@@ -194,36 +181,26 @@ export class AudioService {
       this.audioContext.currentTime,
     );
 
-    // Configure envelope
     const now = this.audioContext.currentTime;
     const duration = effect.duration || this.getDefaultDuration(effect.type);
     const volume = effect.volume || this.getDefaultVolume(effect.type);
 
     this.applyEnvelope(gainNode, now, duration, volume, effect.type);
 
-    // Start and schedule stop
     oscillator.start(now);
     oscillator.stop(now + duration);
 
-    // Track active oscillators
     this.activeOscillators.push(oscillator);
     oscillator.onended = () => {
       const index = this.activeOscillators.indexOf(oscillator);
-      if (index > -1) {
-        this.activeOscillators.splice(index, 1);
-      }
+      if (index > -1) this.activeOscillators.splice(index, 1);
     };
   }
 
   /**
-   * Play a continuous beep (for proximity detection)
-   * Returns a function to stop the beep
-   *
-   * OPTIMIZED FOR MOBILE: Uses a single oscillator and modulates gain
-   * instead of creating new nodes repeatedly.
+   * Continuous beep for proximity (Mobile Optimized)
    */
   startContinuousBeep(baseFrequency: number, beepRate: number): () => void {
-    // 1. Create nodes once
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
 
@@ -232,82 +209,55 @@ export class AudioService {
       baseFrequency,
       this.audioContext.currentTime,
     );
-
-    // Start silent
     gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
 
     oscillator.connect(gainNode);
     gainNode.connect(this.audioContext.destination);
 
-    // Start immediately
     oscillator.start();
     this.activeOscillators.push(oscillator);
 
-    // 2. Schedule rhythm using the same node
     const scheduleBeep = () => {
       if (this.audioContext.state === "closed") return;
-
       const now = this.audioContext.currentTime;
-      const beepDuration = 0.1;
-
-      // Cancel any future scheduled values to prevent conflict
       gainNode.gain.cancelScheduledValues(now);
-
-      // Instant attack, hold, release
       gainNode.gain.setValueAtTime(0, now);
       gainNode.gain.linearRampToValueAtTime(0.3, now + 0.02);
-      gainNode.gain.setValueAtTime(0.3, now + beepDuration - 0.02);
-      gainNode.gain.linearRampToValueAtTime(0, now + beepDuration);
+      gainNode.gain.setValueAtTime(0.3, now + 0.08);
+      gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
     };
 
-    // Initial beep
     scheduleBeep();
-
-    // Loop
     const interval = setInterval(scheduleBeep, beepRate * 1000);
 
-    // Return stop function
     return () => {
       clearInterval(interval);
       try {
         const now = this.audioContext.currentTime;
-        // Smooth fade out
         gainNode.gain.cancelScheduledValues(now);
-        gainNode.gain.setValueAtTime(gainNode.gain.value, now);
         gainNode.gain.linearRampToValueAtTime(0, now + 0.05);
-
         setTimeout(() => {
           oscillator.stop();
           oscillator.disconnect();
           gainNode.disconnect();
           const index = this.activeOscillators.indexOf(oscillator);
-          if (index > -1) {
-            this.activeOscillators.splice(index, 1);
-          }
+          if (index > -1) this.activeOscillators.splice(index, 1);
         }, 100);
       } catch (e) {
-        console.error("Error stopping beep", e);
+        // ignore
       }
     };
   }
 
-  /**
-   * Stop all sounds (but not speech)
-   */
   stopAllSounds() {
     this.activeOscillators.forEach((osc) => {
       try {
         osc.stop();
-      } catch (e) {
-        // Already stopped
-      }
+      } catch (e) {}
     });
     this.activeOscillators = [];
   }
 
-  /**
-   * Stop speech
-   */
   stopSpeech() {
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -315,30 +265,17 @@ export class AudioService {
     }
   }
 
-  /**
-   * Stop everything
-   */
   stopAll() {
     this.stopAllSounds();
     this.stopSpeech();
   }
 
-  /**
-   * Clean up resources
-   */
-  dispose() {
-    this.stopAll();
-    if (this.audioContext.state !== "closed") {
-      this.audioContext.close();
-    }
-  }
-
-  // Private helper methods
+  // --- Private Helpers ---
 
   private getDefaultFrequency(type: string): number {
     switch (type) {
       case "found":
-        return 220; // A3 - warm woody tone
+        return 523.25; // C5 (High chime)
       case "click":
         return 800;
       case "beep":
@@ -349,29 +286,11 @@ export class AudioService {
   }
 
   private getDefaultDuration(type: string): number {
-    switch (type) {
-      case "found":
-        return 0.4;
-      case "click":
-        return 0.05;
-      case "beep":
-        return 0.1;
-      default:
-        return 0.1;
-    }
+    return type === "found" ? 0.6 : 0.1;
   }
 
   private getDefaultVolume(type: string): number {
-    switch (type) {
-      case "found":
-        return 0.15;
-      case "click":
-        return 0.2;
-      case "beep":
-        return 0.3;
-      default:
-        return 0.2;
-    }
+    return type === "found" ? 0.4 : 0.2;
   }
 
   private applyEnvelope(
@@ -381,28 +300,23 @@ export class AudioService {
     volume: number,
     type: string,
   ) {
-    const attackTime = type === "found" ? 0.05 : 0.02;
-    const releaseTime = type === "found" ? duration * 0.7 : 0.02;
-
-    gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(volume, startTime + attackTime);
-    gainNode.gain.setValueAtTime(volume, startTime + duration - releaseTime);
-
     if (type === "found") {
-      // Exponential decay for wooden feel
+      // Bell-like envelope
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.02);
       gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
     } else {
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.01);
+      gainNode.gain.setValueAtTime(volume, startTime + duration - 0.01);
       gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
     }
   }
 }
 
-// Singleton instance
+// Singleton
 let audioServiceInstance: AudioService | null = null;
-
 export function getAudioService(): AudioService {
-  if (!audioServiceInstance) {
-    audioServiceInstance = new AudioService();
-  }
+  if (!audioServiceInstance) audioServiceInstance = new AudioService();
   return audioServiceInstance;
 }
