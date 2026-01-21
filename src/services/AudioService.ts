@@ -35,9 +35,9 @@ export class AudioService {
   private activeOscillators: OscillatorNode[] = [];
 
   constructor() {
-    this.audioContext = new (
-      window.AudioContext || (window as any).webkitAudioContext
-    )();
+    const AudioContextClass =
+      window.AudioContext || (window as any).webkitAudioContext;
+    this.audioContext = new AudioContextClass();
 
     // iOS: Initialize speech synthesis
     if ("speechSynthesis" in window) {
@@ -57,9 +57,22 @@ export class AudioService {
    * Resume audio context (required after user interaction on mobile)
    */
   async resume() {
+    // 1. Check strict suspension state
     if (this.audioContext.state === "suspended") {
       await this.audioContext.resume();
-      console.log("🔊 Audio context resumed");
+    }
+
+    // 2. iOS Safari Trick: Play a silent buffer to physically unlock the audio thread
+    // This is often required even if state says 'running'
+    try {
+      const buffer = this.audioContext.createBuffer(1, 1, 22050);
+      const source = this.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.audioContext.destination);
+      source.start(0);
+      console.log("🔊 Audio context resumed & unlocked");
+    } catch (e) {
+      console.error("Audio unlock failed", e);
     }
   }
 
@@ -154,8 +167,6 @@ export class AudioService {
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
 
-    let destination: AudioNode = gainNode;
-
     // Apply filter if specified
     if (effect.filter) {
       const filter = this.audioContext.createBiquadFilter();
@@ -207,8 +218,12 @@ export class AudioService {
   /**
    * Play a continuous beep (for proximity detection)
    * Returns a function to stop the beep
+   *
+   * OPTIMIZED FOR MOBILE: Uses a single oscillator and modulates gain
+   * instead of creating new nodes repeatedly.
    */
   startContinuousBeep(baseFrequency: number, beepRate: number): () => void {
+    // 1. Create nodes once
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
 
@@ -217,31 +232,61 @@ export class AudioService {
       baseFrequency,
       this.audioContext.currentTime,
     );
+
+    // Start silent
+    gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+
     oscillator.connect(gainNode);
     gainNode.connect(this.audioContext.destination);
 
-    const beep = () => {
+    // Start immediately
+    oscillator.start();
+    this.activeOscillators.push(oscillator);
+
+    // 2. Schedule rhythm using the same node
+    const scheduleBeep = () => {
+      if (this.audioContext.state === "closed") return;
+
       const now = this.audioContext.currentTime;
       const beepDuration = 0.1;
+
+      // Cancel any future scheduled values to prevent conflict
+      gainNode.gain.cancelScheduledValues(now);
+
+      // Instant attack, hold, release
       gainNode.gain.setValueAtTime(0, now);
       gainNode.gain.linearRampToValueAtTime(0.3, now + 0.02);
       gainNode.gain.setValueAtTime(0.3, now + beepDuration - 0.02);
       gainNode.gain.linearRampToValueAtTime(0, now + beepDuration);
     };
 
-    oscillator.start();
-    beep();
-    const interval = setInterval(beep, beepRate * 1000);
+    // Initial beep
+    scheduleBeep();
 
-    this.activeOscillators.push(oscillator);
+    // Loop
+    const interval = setInterval(scheduleBeep, beepRate * 1000);
 
     // Return stop function
     return () => {
       clearInterval(interval);
-      oscillator.stop();
-      const index = this.activeOscillators.indexOf(oscillator);
-      if (index > -1) {
-        this.activeOscillators.splice(index, 1);
+      try {
+        const now = this.audioContext.currentTime;
+        // Smooth fade out
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+        gainNode.gain.linearRampToValueAtTime(0, now + 0.05);
+
+        setTimeout(() => {
+          oscillator.stop();
+          oscillator.disconnect();
+          gainNode.disconnect();
+          const index = this.activeOscillators.indexOf(oscillator);
+          if (index > -1) {
+            this.activeOscillators.splice(index, 1);
+          }
+        }, 100);
+      } catch (e) {
+        console.error("Error stopping beep", e);
       }
     };
   }

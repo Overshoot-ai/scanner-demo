@@ -157,15 +157,18 @@ export default function App() {
       return;
     }
 
-    // ✅ iOS FIX: Speak FIRST - directly in user gesture handler
-    // This must happen before any async operations for iOS
+    // ✅ iOS FIX: Resume Audio Context IMMEDIATELY in the click handler
+    // If we await anything before this, mobile browsers lose the user interaction token
+    getAudioService().resume();
+
+    // ✅ iOS FIX: Speak immediately to prime speech engine
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
     audioService.current.speak({
       text: `Searching for ${searchQuery}`,
       rate: 1.2,
     });
-
-    // Resume audio context (required on mobile)
-    await audioService.current.resume();
 
     // Request navigation permission if needed
     if (navigation.needsPermission) {
@@ -207,6 +210,7 @@ export default function App() {
       text: "Audio is working",
       rate: 1.2,
     });
+    audioService.current.playSound({ type: "found" });
   };
 
   const videoRef = finder.getVideoRef();
@@ -254,6 +258,13 @@ export default function App() {
               </h1>
               <p className="text-neutral-500 text-sm">
                 Audio-guided object finding
+              </p>
+            </div>
+
+            {/* iOS Silent Mode Warning */}
+            <div className="mb-6 p-3 bg-neutral-900/50 rounded-lg border border-neutral-800 text-center">
+              <p className="text-xs text-yellow-500/80">
+                🔔 Make sure Silent Mode (ringer switch) is OFF on your phone.
               </p>
             </div>
 
@@ -306,7 +317,7 @@ export default function App() {
               onClick={handleTestAudio}
               className="w-full bg-neutral-800 hover:bg-neutral-700 text-neutral-100 font-medium py-3 px-8 rounded text-base transition-colors mb-3"
             >
-              Test Audio
+              Test Audio & Speak
             </button>
 
             <button
