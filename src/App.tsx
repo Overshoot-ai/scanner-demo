@@ -3,6 +3,21 @@ import { useFinder } from "./hooks/useFinder";
 import { useNavigation } from "./hooks/useNavigation";
 import { getAudioService } from "./services/AudioService";
 
+const NAV_PHRASES = [
+  "Left",
+  "Right",
+  "Slight Left",
+  "Slight Right",
+  "Right here",
+  "Tilt up",
+  "Tilt down",
+  "Found it",
+  "Lost",
+  "Stopped",
+  "Location cleared",
+  "Voice check. Left. Right. Center.",
+];
+
 export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>(
@@ -17,25 +32,26 @@ export default function App() {
   const navigationRef = useRef<any>(null);
   const finderRef = useRef<any>(null);
 
-  // Keep ref in sync
   useEffect(() => {
     searchQueryRef.current = searchQuery;
   }, [searchQuery]);
 
-  // Initialize speech synthesis on mount (iOS fix)
+  // Initialize and Pre-synthesize
   useEffect(() => {
-    // Prime the engine silently
-    if ("speechSynthesis" in window) {
-      const u = new SpeechSynthesisUtterance(" ");
-      u.volume = 0;
-      window.speechSynthesis.speak(u);
-    }
+    const initAudio = async () => {
+      // iOS priming
+      if ("speechSynthesis" in window) {
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+      // Pre-fetch navigation voices from ElevenLabs
+      await audioService.current.preSynthesizePhrases(NAV_PHRASES);
+    };
+    initAudio();
   }, []);
 
-  // --- Callbacks ---
-
   const handleFound = useCallback((result: any) => {
-    console.log("✨ Item found callback");
     audioService.current.speak({
       text: "Found it",
       rate: 1.2,
@@ -55,22 +71,11 @@ export default function App() {
     }
   }, []);
 
-  const handleDistanceChanged = useCallback((distance: string) => {
-    // Distance handled by beeps, no speech needed to avoid clutter
-    console.log("📏 Distance:", distance);
-  }, []);
-
   const handleLost = useCallback(() => {
-    console.log("👋 Item lost callback");
-
-    // Only announce "lost" and clear location if we're at the target (guidance says "center")
-    // This means we returned to where the object was, but it's not there anymore
     if (
       navigationRef.current?.isNavigating &&
       navigationRef.current?.guidance.direction === "center"
     ) {
-      // User is at the marked location, but object isn't there
-      // Clear the location and announce "lost"
       navigationRef.current.clearLocation();
       audioService.current.speak({
         text: "Lost",
@@ -78,66 +83,54 @@ export default function App() {
         priority: "high",
       });
     }
-    // Otherwise, just lost sight - navigation will continue providing directions
   }, []);
 
-  // ✅ Navigation guidance - provides directions when navigating back to lost item
   const handleGuidanceChange = useCallback((guidance: any) => {
-    console.log("🧭 Guidance changed:", guidance.text);
     if (guidance.text) {
-      // Directions: "Left", "Slight Right", "Right here", "Tilt up/down"
-      // The navigation hook already checks isObjectVisible, so we just speak
       audioService.current.speak({
         text: guidance.text,
         rate: 1.2,
-        priority: "high", // Directions should interrupt other speech
+        priority: "high",
       });
     }
   }, []);
 
-  // ✅ Location locked feedback
   const handleLocationMarked = useCallback(() => {
-    console.log("📍 Location marked");
-    // Play a distinct "Lock on" sound (double beep)
     audioService.current.playSound({
       type: "found",
-      frequency: 660, // E5
+      frequency: 660,
       duration: 0.1,
     });
     setTimeout(() => {
       audioService.current.playSound({
         type: "found",
-        frequency: 880, // A5
+        frequency: 880,
         duration: 0.2,
       });
     }, 150);
   }, []);
 
-  // Finder hook - manages vision detection (CREATE THIS FIRST)
   const finder = useFinder({
     onFound: handleFound,
-    onDistanceChanged: handleDistanceChanged,
+    onDistanceChanged: () => {},
     onLost: handleLost,
   });
 
-  // Keep finderRef in sync
   useEffect(() => {
     finderRef.current = finder;
   }, [finder]);
 
-  // Navigation hook - manages return to item (CREATE THIS AFTER FINDER)
   const navigation = useNavigation({
     onGuidanceChange: handleGuidanceChange,
     onLocationMarked: handleLocationMarked,
     isObjectVisible: () => finderRef.current?.state.result?.visible ?? false,
   });
 
-  // Keep navigationRef in sync
   useEffect(() => {
     navigationRef.current = navigation;
   }, [navigation]);
 
-  // Enumerate video devices
+  // Device Enumeration
   useEffect(() => {
     const getDevices = async () => {
       try {
@@ -146,8 +139,6 @@ export default function App() {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter((d) => d.kind === "videoinput");
         setAvailableDevices(videoDevices);
-
-        // Auto-select Meta/Ray-Ban or back camera
         const meta = videoDevices.find((d) =>
           /meta|ray-ban|back|environment/i.test(d.label),
         );
@@ -155,13 +146,13 @@ export default function App() {
         else if (videoDevices.length > 0)
           setSelectedDeviceId(videoDevices[0].deviceId);
       } catch (err) {
-        console.error("Device Enum Error", err);
+        console.error(err);
       }
     };
     getDevices();
   }, []);
 
-  // Handle beeping logic
+  // Beeping Logic
   useEffect(() => {
     const cleanup = () => {
       if (beepStopRef.current) {
@@ -170,20 +161,14 @@ export default function App() {
       }
     };
 
-    if (!finder.state.isScanning || !finder.state.result) {
+    if (
+      finder.state.isScanning &&
+      finder.state.result?.visible &&
+      finder.state.result.confidence >= 0.3
+    ) {
       cleanup();
-      return;
-    }
-
-    const result = finder.state.result;
-
-    // Restart beep if parameters changed significantly
-    if (result.visible && result.confidence >= 0.3) {
-      cleanup(); // Stop old beep
-
-      const baseFreq = 200 + result.confidence * 600; // 200Hz - 800Hz
-      const rate = Math.max(0.1, 1.2 - result.confidence); // Faster as confidence grows
-
+      const baseFreq = 200 + finder.state.result.confidence * 600;
+      const rate = Math.max(0.1, 1.2 - finder.state.result.confidence);
       beepStopRef.current = audioService.current.startContinuousBeep(
         baseFreq,
         rate,
@@ -191,58 +176,32 @@ export default function App() {
     } else {
       cleanup();
     }
-
     return cleanup;
-  }, [
-    finder.state.isScanning,
-    finder.state.result?.confidence,
-    finder.state.result?.visible,
-  ]);
+  }, [finder.state.isScanning, finder.state.result]);
 
-  // Actions
   const handleStartScanning = async () => {
     if (!searchQuery.trim()) return;
-
-    // 1. Resume Audio (Required for mobile)
     await audioService.current.resume();
-
-    // 2. Speak immediately
     audioService.current.speak({
       text: `Looking for ${searchQuery}`,
       rate: 1.1,
       priority: "high",
     });
-
-    if (navigation.needsPermission) {
-      await navigation.requestPermission();
-    }
-
+    if (navigation.needsPermission) await navigation.requestPermission();
     await finder.startScanning({ searchQuery });
   };
 
   const handleStopScanning = async () => {
     await finder.stopScanning();
-    if (beepStopRef.current) {
-      beepStopRef.current();
-      beepStopRef.current = null;
-    }
-
-    // Clear navigation location when stopping
-    if (navigationRef.current) {
-      navigationRef.current.clearLocation();
-    }
-
-    audioService.current.stopAll(); // Stop any pending speech
-    audioService.current.speak({ text: "Stopped" });
-  };
-
-  const handleClearLocation = () => {
+    if (beepStopRef.current) beepStopRef.current();
     navigation.clearLocation();
-    audioService.current.speak({ text: "Location cleared" });
+    audioService.current.stopAll();
+    audioService.current.speak({ text: "Stopped" });
   };
 
   const handleTestAudio = async () => {
     await audioService.current.resume();
+    // This text is included in NAV_PHRASES for zero-latency testing
     audioService.current.speak({
       text: "Voice check. Left. Right. Center.",
       priority: "high",
@@ -250,20 +209,8 @@ export default function App() {
     audioService.current.playSound({ type: "found" });
   };
 
-  const videoRef = finder.getVideoRef();
-
-  // Visual helper for rotation
-  const getArrowRotation = () => {
-    const dir = navigation.guidance.direction;
-    if (!dir) return 0;
-    if (dir.includes("left")) return dir.includes("slight") ? -45 : -90;
-    if (dir.includes("right")) return dir.includes("slight") ? 45 : 90;
-    return 0;
-  };
-
   return (
-    <div className="fixed inset-0 bg-neutral-950 overflow-hidden text-neutral-100">
-      {/* Hidden ARIA region for screen readers */}
+    <div className="fixed inset-0 bg-neutral-950 text-neutral-100 overflow-hidden">
       <div className="sr-only" role="status" aria-live="polite">
         {finder.state.result?.visible
           ? `Found ${searchQuery}`
@@ -271,173 +218,74 @@ export default function App() {
       </div>
 
       {!finder.state.isScanning ? (
-        // --- Setup Screen ---
         <div className="h-full flex flex-col p-6 max-w-md mx-auto justify-center">
-          <h1 className="text-4xl font-light mb-2 text-center">
+          <h1 className="text-4xl font-light mb-8 text-center">
             Vision Scanner
           </h1>
-
-          <div className="bg-neutral-900/50 p-3 rounded mb-8 border border-neutral-800 text-center">
-            <p className="text-xs text-yellow-500">
-              ⚠️ Turn off Silent Mode (Ringer) for audio cues
-            </p>
-          </div>
-
           <div className="space-y-4 mb-8">
-            {availableDevices.length > 0 && (
-              <select
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                className="w-full bg-neutral-900 border border-neutral-700 rounded p-3"
-              >
-                {availableDevices.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || "Camera"}
-                  </option>
-                ))}
-              </select>
-            )}
-
+            <select
+              value={selectedDeviceId}
+              onChange={(e) => setSelectedDeviceId(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-700 rounded p-3"
+            >
+              {availableDevices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || "Camera"}
+                </option>
+              ))}
+            </select>
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Find (e.g. keys, door)..."
+              placeholder="Find something..."
               className="w-full bg-neutral-900 border border-neutral-700 rounded p-4 text-lg"
             />
           </div>
-
           <div className="space-y-3">
             <button
               onClick={handleTestAudio}
-              className="w-full py-3 bg-neutral-800 rounded font-medium"
+              className="w-full py-3 bg-neutral-800 rounded"
             >
               Test Audio
             </button>
             <button
               onClick={handleStartScanning}
-              disabled={!searchQuery.trim()}
-              className="w-full py-4 bg-white text-black rounded font-bold text-lg disabled:opacity-50"
+              className="w-full py-4 bg-white text-black rounded font-bold"
             >
               Start Scanning
             </button>
           </div>
-
-          {finder.state.error && (
-            <p className="text-red-400 text-center mt-4 text-sm">
-              {finder.state.error}
-            </p>
-          )}
         </div>
       ) : (
-        // --- Scanner Screen ---
         <div className="relative h-full w-full bg-black">
           <video
-            ref={videoRef}
+            ref={finder.getVideoRef()}
             autoPlay
             playsInline
             muted
             className="absolute inset-0 w-full h-full object-cover opacity-60"
           />
-
-          {/* Debug Info - Top Left (Toggleable) */}
-          {debugMode && (
-            <div className="absolute top-4 left-4 bg-black/80 p-3 rounded text-xs font-mono pointer-events-none">
-              <div className="text-green-400">DEBUG MODE</div>
-              {navigation.itemLocation && (
-                <>
-                  <div className="text-white mt-2">
-                    Target Heading: {navigation.itemLocation.heading.toFixed(1)}
-                    °
-                  </div>
-                  <div className="text-white">
-                    Current Heading:{" "}
-                    {navigation.getOrientation().heading?.toFixed(1) ?? "null"}°
-                  </div>
-                  <div className="text-yellow-400 mt-1">
-                    Diff:{" "}
-                    {(() => {
-                      const current = navigation.getOrientation().heading;
-                      if (current === null) return "null";
-                      let diff = navigation.itemLocation.heading - current;
-                      if (diff > 180) diff -= 360;
-                      if (diff < -180) diff += 360;
-                      return diff.toFixed(1);
-                    })()}
-                    °
-                  </div>
-                  <div className="text-gray-400 mt-2 text-[10px]">
-                    Beta:{" "}
-                    {navigation.getOrientation().beta?.toFixed(1) ?? "null"}° /{" "}
-                    {navigation.itemLocation.beta.toFixed(1)}°
-                  </div>
-                  <div className="text-gray-400 text-[10px]">
-                    Gamma:{" "}
-                    {navigation.getOrientation().gamma?.toFixed(1) ?? "null"}° /{" "}
-                    {navigation.itemLocation.gamma.toFixed(1)}°
-                  </div>
-                </>
-              )}
-              {!navigation.itemLocation && (
-                <div className="text-gray-500 mt-2">No location marked</div>
-              )}
-              <div className="text-cyan-400 mt-2">
-                Direction: {navigation.guidance.direction || "none"}
-              </div>
-            </div>
-          )}
-
-          {/* Debug Toggle Button - Top Right */}
-          <button
-            onClick={() => setDebugMode(!debugMode)}
-            className="absolute top-4 right-4 bg-black/80 px-3 py-2 rounded text-xs font-mono text-gray-400 hover:text-white"
-          >
-            {debugMode ? "Hide Debug" : "Show Debug"}
-          </button>
-
-          {/* Navigation Overlay */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            {/* If Navigating back to item (location marked but not visible) */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
             {navigation.isNavigating && !finder.state.result?.visible && (
-              <div className="text-center">
-                <div
-                  style={{ transform: `rotate(${getArrowRotation()}deg)` }}
-                  className="transition-transform duration-300 inline-block mb-4"
-                >
-                  <div className="text-6xl">↑</div>
-                </div>
-                <div className="text-3xl font-bold drop-shadow-md">
-                  {navigation.guidance.text || "Scanning..."}
-                </div>
+              <div className="text-3xl font-bold">
+                {navigation.guidance.text}
               </div>
             )}
-
-            {/* If Item Visible */}
             {finder.state.result?.visible && (
-              <div className="border-4 border-green-500 rounded-lg w-64 h-64 flex items-center justify-center animate-pulse">
-                <span className="bg-green-500 text-black px-2 py-1 rounded font-bold">
+              <div className="border-4 border-green-500 w-64 h-64 flex items-center justify-center animate-pulse">
+                <span className="bg-green-500 text-black px-2 py-1 font-bold">
                   FOUND
                 </span>
               </div>
             )}
           </div>
-
-          <div className="absolute bottom-8 left-0 right-0 flex justify-center gap-4">
-            <button
-              onClick={handleStopScanning}
-              className="bg-red-600 px-8 py-4 rounded-full font-bold shadow-lg"
-            >
-              STOP
-            </button>
-            {navigation.isNavigating && (
-              <button
-                onClick={handleClearLocation}
-                className="bg-neutral-800 px-6 py-4 rounded-full font-medium"
-              >
-                Clear Loc
-              </button>
-            )}
-          </div>
+          <button
+            onClick={handleStopScanning}
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-red-600 px-12 py-4 rounded-full font-bold"
+          >
+            STOP
+          </button>
         </div>
       )}
     </div>
