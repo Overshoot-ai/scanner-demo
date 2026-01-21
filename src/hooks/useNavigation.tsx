@@ -51,7 +51,7 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
   const lastGuidanceRef = useRef<string>("");
   const lastGuidanceTimeRef = useRef<number>(0);
   const callbacksRef = useRef(callbacks);
-  const GUIDANCE_COOLDOWN_MS = 3000;
+  const GUIDANCE_COOLDOWN_MS = 1500; // Repeat every 1.5 seconds
 
   // Keep callbacks ref in sync but don't trigger re-renders
   useEffect(() => {
@@ -234,25 +234,16 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
 
     setGuidance(newGuidance);
 
-    // Notify callback if guidance changed (with cooldown)
+    // Notify callback - repeat every GUIDANCE_COOLDOWN_MS
     if (callbacksRef.current?.onGuidanceChange) {
       const now = Date.now();
       const timeSinceLastGuidance = now - lastGuidanceTimeRef.current;
 
-      if (
-        newGuidance.text !== lastGuidanceRef.current &&
-        timeSinceLastGuidance > GUIDANCE_COOLDOWN_MS
-      ) {
-        // Only announce important changes
-        if (
-          newGuidance.direction === "center" ||
-          (timeSinceLastGuidance > GUIDANCE_COOLDOWN_MS * 2 &&
-            Math.abs(diff) > 30)
-        ) {
-          callbacksRef.current.onGuidanceChange(newGuidance);
-          lastGuidanceRef.current = newGuidance.text;
-          lastGuidanceTimeRef.current = now;
-        }
+      // Always announce if enough time has passed (removed the "only on change" logic)
+      if (timeSinceLastGuidance > GUIDANCE_COOLDOWN_MS) {
+        callbacksRef.current.onGuidanceChange(newGuidance);
+        lastGuidanceRef.current = newGuidance.text;
+        lastGuidanceTimeRef.current = now;
       }
     }
   }, [currentHeading, currentBeta, itemLocation]);
