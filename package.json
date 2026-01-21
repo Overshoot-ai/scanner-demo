@@ -1,5 +1,5 @@
 {
-  "name": "narrator",
+  "name": "Scanner",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
-    "@overshoot/sdk": "^0.1.0-alpha.1",
+    "@overshoot/sdk": "^0.1.0-alpha.3",
     "@tailwindcss/vite": "^4.1.18",
     "lucide-react": "^0.460.0",
     "react": "^19.2.0",
@@ -23,6 +23,7 @@
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-basic-ssl": "^2.1.4",
     "@vitejs/plugin-react": "^5.1.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
