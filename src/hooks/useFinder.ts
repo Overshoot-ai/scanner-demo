@@ -26,13 +26,15 @@ export interface FinderState {
 }
 
 export interface FinderCallbacks {
-  onFound: (result: FinderResult) => void;
+  onFoundSound: (result: FinderResult) => void; // Immediate sound on first detection
+  onFoundConfirmed: (result: FinderResult) => void; // Speech + UI after 2 consecutive detections
   onDistanceChanged: (distance: string) => void;
   onLost: () => void;
 }
 
 export interface FinderConfig {
   searchQuery: string;
+  deviceId?: string;
   apiUrl?: string;
   apiKey?: string;
   onResult?: (result: FinderResult) => void;
@@ -56,7 +58,9 @@ export function useFinder(callbacks: FinderCallbacks) {
   }>({ wasVisible: false, distance: null, timestamp: 0 });
 
   const consecutiveNegativesRef = useRef<number>(0);
+  const consecutivePositivesRef = useRef<number>(0);
   const REQUIRED_NEGATIVES_FOR_LOST = 3;
+  const REQUIRED_POSITIVES_FOR_CONFIRMED = 2;
   const ANNOUNCEMENT_COOLDOWN_MS = 5000;
 
   /**
@@ -84,12 +88,36 @@ export function useFinder(callbacks: FinderCallbacks) {
       timestamp: 0,
     };
     consecutiveNegativesRef.current = 0;
+    consecutivePositivesRef.current = 0;
+
+    // Override getUserMedia to force specific device if deviceId is specified
+    const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices,
+    );
+    const restoreGetUserMedia = () => {
+      navigator.mediaDevices.getUserMedia = originalGetUserMedia;
+    };
+    if (config.deviceId) {
+      console.log("📷 Overriding getUserMedia to use device:", config.deviceId);
+      navigator.mediaDevices.getUserMedia = async (constraints) => {
+        const newConstraints = {
+          ...constraints,
+          video:
+            typeof constraints?.video === "object"
+              ? { ...constraints.video, deviceId: { exact: config.deviceId } }
+              : { deviceId: { exact: config.deviceId } },
+        };
+        console.log("📷 Modified constraints:", newConstraints);
+        return originalGetUserMedia(newConstraints);
+      };
+    }
 
     try {
       const apiUrl = config.apiUrl || "https://cluster1.overshoot.ai/api/v0.2";
       const apiKey = config.apiKey || import.meta.env.VITE_API_KEY || "";
 
       console.log("🔍 Starting vision scanning for:", config.searchQuery);
+      console.log("📷 Using device ID:", config.deviceId || "default (environment)");
 
       const vision = new RealtimeVision({
         apiUrl,
@@ -158,6 +186,12 @@ Be precise - only set visible=true if you're confident it's the correct object.`
       await vision.start();
       visionRef.current = vision;
 
+      // Restore original getUserMedia
+      if (config.deviceId) {
+        restoreGetUserMedia();
+        console.log("📷 Restored original getUserMedia");
+      }
+
       // Attach video stream
       const stream = vision.getMediaStream();
       if (stream && videoRef.current) {
@@ -166,6 +200,10 @@ Be precise - only set visible=true if you're confident it's the correct object.`
 
       console.log("✅ Vision scanning started");
     } catch (err) {
+      // Restore original getUserMedia on error
+      if (config.deviceId) {
+        restoreGetUserMedia();
+      }
       console.error("❌ Failed to start scanning:", err);
       setState((prev) => ({
         ...prev,
@@ -199,6 +237,7 @@ Be precise - only set visible=true if you're confident it's the correct object.`
       timestamp: 0,
     };
     consecutiveNegativesRef.current = 0;
+    consecutivePositivesRef.current = 0;
   };
 
   /**
@@ -210,17 +249,31 @@ Be precise - only set visible=true if you're confident it's the correct object.`
       const lastAnnouncement = lastAnnouncementRef.current;
       const timeSinceLastAnnouncement = now - lastAnnouncement.timestamp;
 
-      // Track consecutive negatives
+      // Track consecutive positives/negatives
       if (!result.visible) {
         consecutiveNegativesRef.current++;
+        consecutivePositivesRef.current = 0;
       } else {
         consecutiveNegativesRef.current = 0;
+        consecutivePositivesRef.current++;
       }
 
-      // Case 1: Object just became visible (not found -> found)
-      if (result.visible && !lastAnnouncement.wasVisible) {
-        console.log("✨ Object found!");
-        cbs.onFound(result);
+      // Case 1a: First detection - play sound only
+      if (result.visible && consecutivePositivesRef.current === 1) {
+        console.log("🔊 First detection - playing sound");
+        cbs.onFoundSound(result);
+        // Don't update wasVisible yet - wait for confirmation
+        return;
+      }
+
+      // Case 1b: Confirmed detection (2+ consecutive) - speech + UI
+      if (
+        result.visible &&
+        consecutivePositivesRef.current >= REQUIRED_POSITIVES_FOR_CONFIRMED &&
+        !lastAnnouncement.wasVisible
+      ) {
+        console.log("✨ Object confirmed found!");
+        cbs.onFoundConfirmed(result);
         lastAnnouncementRef.current = {
           wasVisible: true,
           distance: result.distance || null,

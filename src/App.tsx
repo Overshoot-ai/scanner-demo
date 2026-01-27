@@ -24,6 +24,7 @@ export default function App() {
     [],
   );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [confirmedFound, setConfirmedFound] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
 
   const audioService = useRef(getAudioService());
@@ -51,13 +52,19 @@ export default function App() {
     initAudio();
   }, []);
 
-  const handleFound = useCallback((result: any) => {
+  // First detection - sound only
+  const handleFoundSound = useCallback((_result: any) => {
+    audioService.current.playSound({ type: "found" });
+  }, []);
+
+  // Confirmed detection (2+ consecutive) - speech + UI
+  const handleFoundConfirmed = useCallback((result: any) => {
+    setConfirmedFound(true);
     audioService.current.speak({
       text: "Found it",
       rate: 1.2,
       priority: "high",
     });
-    audioService.current.playSound({ type: "found" });
 
     if (
       result.confidence > 0.6 &&
@@ -72,6 +79,7 @@ export default function App() {
   }, []);
 
   const handleLost = useCallback(() => {
+    setConfirmedFound(false);
     if (
       navigationRef.current?.isNavigating &&
       navigationRef.current?.guidance.direction === "center"
@@ -111,7 +119,8 @@ export default function App() {
   }, []);
 
   const finder = useFinder({
-    onFound: handleFound,
+    onFoundSound: handleFoundSound,
+    onFoundConfirmed: handleFoundConfirmed,
     onDistanceChanged: () => {},
     onLost: handleLost,
   });
@@ -138,13 +147,25 @@ export default function App() {
         await navigator.mediaDevices.getUserMedia({ video: true });
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter((d) => d.kind === "videoinput");
+        console.log("Available cameras:", videoDevices.map(d => ({ label: d.label, id: d.deviceId })));
         setAvailableDevices(videoDevices);
+        // Prioritize iPhone camera, then Meta/Ray-Ban, then any back camera
+        const iphone = videoDevices.find((d) =>
+          /iphone|ios/i.test(d.label),
+        );
         const meta = videoDevices.find((d) =>
           /meta|ray-ban|back|environment/i.test(d.label),
         );
-        if (meta) setSelectedDeviceId(meta.deviceId);
-        else if (videoDevices.length > 0)
+        if (iphone) {
+          console.log("Selected iPhone camera:", iphone.label);
+          setSelectedDeviceId(iphone.deviceId);
+        } else if (meta) {
+          console.log("Selected Meta/back camera:", meta.label);
+          setSelectedDeviceId(meta.deviceId);
+        } else if (videoDevices.length > 0) {
+          console.log("Selected first available camera:", videoDevices[0].label);
           setSelectedDeviceId(videoDevices[0].deviceId);
+        }
       } catch (err) {
         console.error(err);
       }
@@ -188,11 +209,12 @@ export default function App() {
       priority: "high",
     });
     if (navigation.needsPermission) await navigation.requestPermission();
-    await finder.startScanning({ searchQuery });
+    await finder.startScanning({ searchQuery, deviceId: selectedDeviceId });
   };
 
   const handleStopScanning = async () => {
     await finder.stopScanning();
+    setConfirmedFound(false);
     if (beepStopRef.current) beepStopRef.current();
     navigation.clearLocation();
     audioService.current.stopAll();
@@ -212,9 +234,7 @@ export default function App() {
   return (
     <div className="fixed inset-0 bg-neutral-950 text-neutral-100 overflow-hidden">
       <div className="sr-only" role="status" aria-live="polite">
-        {finder.state.result?.visible
-          ? `Found ${searchQuery}`
-          : navigation.guidance.text}
+        {confirmedFound ? `Found ${searchQuery}` : navigation.guidance.text}
       </div>
 
       {!finder.state.isScanning ? (
@@ -267,12 +287,12 @@ export default function App() {
             className="absolute inset-0 w-full h-full object-cover opacity-60"
           />
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            {navigation.isNavigating && !finder.state.result?.visible && (
+            {navigation.isNavigating && !confirmedFound && (
               <div className="text-3xl font-bold">
                 {navigation.guidance.text}
               </div>
             )}
-            {finder.state.result?.visible && (
+            {confirmedFound && (
               <div className="border-4 border-green-500 w-64 h-64 flex items-center justify-center animate-pulse">
                 <span className="bg-green-500 text-black px-2 py-1 font-bold">
                   FOUND
