@@ -194,9 +194,10 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
           : 0;
 
       if (betaDiff < 20) {
+        // At the right location - don't announce anything, let the finder determine "found"
         newGuidance = {
           direction: "center",
-          text: "Right here",
+          text: "", // No "Right here" - finder determines found state
           glowSide: "center",
         };
       } else {

@@ -14,6 +14,7 @@
     "@overshoot/sdk": "^0.1.0-alpha.3",
     "@tailwindcss/vite": "^4.1.18",
     "lucide-react": "^0.460.0",
+    "overshoot": "link:../../../Library/pnpm/global/5/node_modules/overshoot",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18"

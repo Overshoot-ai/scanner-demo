@@ -102,7 +102,10 @@ export class AudioService {
   }
 
   async speak(request: SpeechRequest): Promise<void> {
-    if (!this.elevenLabsApiKey) return;
+    // Resume audio context if suspended (iOS suspends after inactivity)
+    if (this.audioContext.state === "suspended") {
+      await this.audioContext.resume();
+    }
 
     if (request.priority === "high") {
       this.stopSpeech();
@@ -110,38 +113,65 @@ export class AudioService {
       return;
     }
 
-    try {
-      this.isSpeaking = true;
-      let audioUrl = this.audioCache.get(request.text);
+    // Try ElevenLabs first if API key exists
+    if (this.elevenLabsApiKey) {
+      try {
+        this.isSpeaking = true;
+        let audioUrl = this.audioCache.get(request.text);
 
-      if (!audioUrl) {
-        audioUrl = (await this.fetchSpeechBlobUrl(
-          request.text,
-          request.rate,
-        )) as string;
-      }
-
-      if (!audioUrl) {
-        this.isSpeaking = false;
-        return;
-      }
-
-      const audio = new Audio(audioUrl);
-      audio.onended = () => {
-        this.isSpeaking = false;
-        // Only revoke if it wasn't from the permanent cache
-        if (!this.audioCache.has(request.text)) {
-          URL.revokeObjectURL(audioUrl!);
+        if (!audioUrl) {
+          audioUrl = (await this.fetchSpeechBlobUrl(
+            request.text,
+            request.rate,
+          )) as string;
         }
-      };
-      await audio.play();
-    } catch (error) {
-      console.error("Speech error:", error);
-      this.isSpeaking = false;
+
+        if (audioUrl) {
+          const audio = new Audio(audioUrl);
+          audio.onended = () => {
+            this.isSpeaking = false;
+            // Only revoke if it wasn't from the permanent cache
+            if (!this.audioCache.has(request.text)) {
+              URL.revokeObjectURL(audioUrl!);
+            }
+          };
+          await audio.play();
+          return;
+        }
+      } catch (error) {
+        console.error("ElevenLabs speech error, falling back to browser:", error);
+      }
     }
+
+    // Fallback to browser speech synthesis
+    this.speakWithBrowserSynthesis(request);
+  }
+
+  private speakWithBrowserSynthesis(request: SpeechRequest): void {
+    if (!("speechSynthesis" in window)) {
+      console.warn("Browser speech synthesis not available");
+      this.isSpeaking = false;
+      return;
+    }
+
+    this.isSpeaking = true;
+    const utterance = new SpeechSynthesisUtterance(request.text);
+    utterance.rate = request.rate || 1.0;
+    utterance.onend = () => {
+      this.isSpeaking = false;
+    };
+    utterance.onerror = () => {
+      this.isSpeaking = false;
+    };
+    window.speechSynthesis.speak(utterance);
   }
 
   playSound(effect: SoundEffect): void {
+    // Resume audio context if suspended (iOS suspends after inactivity)
+    if (this.audioContext.state === "suspended") {
+      this.audioContext.resume();
+    }
+
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
     oscillator.type = effect.type === "found" ? "sine" : "triangle";
@@ -167,6 +197,11 @@ export class AudioService {
   }
 
   startContinuousBeep(baseFrequency: number, beepRate: number): () => void {
+    // Resume audio context if suspended (iOS suspends after inactivity)
+    if (this.audioContext.state === "suspended") {
+      this.audioContext.resume();
+    }
+
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
     oscillator.type = "triangle";
@@ -202,6 +237,10 @@ export class AudioService {
 
   stopSpeech() {
     this.isSpeaking = false;
+    // Cancel browser speech synthesis if active
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
   }
 
   stopAll() {

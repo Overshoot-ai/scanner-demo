@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  overshoot: link:../../../Library/pnpm/global/5/node_modules/overshoot
+
 importers:
 
   .:
@@ -20,6 +23,9 @@ importers:
       lucide-react:
         specifier: ^0.460.0
         version: 0.460.0(react@19.2.3)
+      overshoot:
+        specifier: link:../../../Library/pnpm/global/5/node_modules/overshoot
+        version: link:../../../Library/pnpm/global/5/node_modules/overshoot
       react:
         specifier: ^19.2.0
         version: 19.2.3

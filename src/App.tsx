@@ -231,6 +231,21 @@ export default function App() {
     audioService.current.playSound({ type: "found" });
   };
 
+  const handleEnablePermissions = async () => {
+    // Resume audio context (required for iOS)
+    await audioService.current.resume();
+    console.log("✅ Audio context resumed");
+
+    // Request device orientation permission (iOS 13+)
+    if (navigation.needsPermission) {
+      const granted = await navigation.requestPermission();
+      console.log("📱 Device orientation permission:", granted ? "granted" : "denied");
+    }
+
+    // Play a test beep to confirm audio works
+    audioService.current.playSound({ type: "found" });
+  };
+
   return (
     <div className="fixed inset-0 bg-neutral-950 text-neutral-100 overflow-hidden">
       <div className="sr-only" role="status" aria-live="polite">
@@ -263,6 +278,12 @@ export default function App() {
             />
           </div>
           <div className="space-y-3">
+            <button
+              onClick={handleEnablePermissions}
+              className="w-full py-3 bg-blue-600 rounded font-medium"
+            >
+              Enable Audio & Sensors
+            </button>
             <button
               onClick={handleTestAudio}
               className="w-full py-3 bg-neutral-800 rounded"
