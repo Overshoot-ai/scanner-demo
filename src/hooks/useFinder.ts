@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { RealtimeVision } from "@overshoot/sdk";
+import { RealtimeVision } from "overshoot";
 
 export interface FinderResult {
   visible: boolean;
@@ -113,16 +113,15 @@ export function useFinder(callbacks: FinderCallbacks) {
     }
 
     try {
-      const apiUrl = config.apiUrl || "https://cluster1.overshoot.ai/api/v0.2";
       const apiKey = config.apiKey || import.meta.env.VITE_API_KEY || "";
 
       console.log("🔍 Starting vision scanning for:", config.searchQuery);
       console.log("📷 Using device ID:", config.deviceId || "default (environment)");
 
       const vision = new RealtimeVision({
-        apiUrl,
+        ...(config.apiUrl ? { apiUrl: config.apiUrl } : {}),
         apiKey,
-        prompt: `You are helping a visually impaired person find: "${config.searchQuery}". 
+        prompt: `You are helping a visually impaired person find: "${config.searchQuery}".
 Analyze the video and determine if the object is visible. Return ONLY JSON with these fields:
 - visible (boolean): is the object clearly visible in frame?
 - confidence (number 0-1): how confident are you it's the correct object?
@@ -137,7 +136,8 @@ Be precise - only set visible=true if you're confident it's the correct object.`
         },
         backend: "overshoot",
         model: "Qwen/Qwen3-VL-30B-A3B-Instruct",
-        processing: {
+        mode: "clip",
+        clipProcessing: {
           fps: 30,
           sampling_ratio: 0.6,
           clip_length_seconds: 0.2,
