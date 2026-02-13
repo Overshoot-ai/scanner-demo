@@ -267,7 +267,7 @@ export class AudioService {
     s: number,
     d: number,
     v: number,
-    t: string,
+    _t: string,
   ) {
     g.gain.setValueAtTime(0, s);
     g.gain.linearRampToValueAtTime(v, s + 0.02);
