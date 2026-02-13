@@ -25,6 +25,12 @@ export default function App() {
     [],
   );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [availableModels, setAvailableModels] = useState<
+    { model: string; ready: boolean }[]
+  >([]);
+  const [selectedModel, setSelectedModel] = useState<string>(
+    "Qwen/Qwen3-VL-30B-A3B-Instruct",
+  );
   const [confirmedFound, setConfirmedFound] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -148,12 +154,13 @@ export default function App() {
         await navigator.mediaDevices.getUserMedia({ video: true });
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter((d) => d.kind === "videoinput");
-        console.log("Available cameras:", videoDevices.map(d => ({ label: d.label, id: d.deviceId })));
+        console.log(
+          "Available cameras:",
+          videoDevices.map((d) => ({ label: d.label, id: d.deviceId })),
+        );
         setAvailableDevices(videoDevices);
         // Prioritize iPhone camera, then Meta/Ray-Ban, then any back camera
-        const iphone = videoDevices.find((d) =>
-          /iphone|ios/i.test(d.label),
-        );
+        const iphone = videoDevices.find((d) => /iphone|ios/i.test(d.label));
         const meta = videoDevices.find((d) =>
           /meta|ray-ban|back|environment/i.test(d.label),
         );
@@ -164,7 +171,10 @@ export default function App() {
           console.log("Selected Meta/back camera:", meta.label);
           setSelectedDeviceId(meta.deviceId);
         } else if (videoDevices.length > 0) {
-          console.log("Selected first available camera:", videoDevices[0].label);
+          console.log(
+            "Selected first available camera:",
+            videoDevices[0].label,
+          );
           setSelectedDeviceId(videoDevices[0].deviceId);
         }
       } catch (err) {
@@ -172,6 +182,25 @@ export default function App() {
       }
     };
     getDevices();
+  }, []);
+
+  // Model Enumeration
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const res = await fetch("https://api.overshoot.ai/v0.2/models");
+        const data: { model: string; ready: boolean; status: string }[] =
+          await res.json();
+        const readyModels = data.filter((m) => m.ready);
+        setAvailableModels(readyModels);
+        if (readyModels.length > 0 && !readyModels.some((m) => m.model === selectedModel)) {
+          setSelectedModel(readyModels[0].model);
+        }
+      } catch (err) {
+        console.error("Failed to fetch models:", err);
+      }
+    };
+    fetchModels();
   }, []);
 
   // Beeping Logic
@@ -210,7 +239,7 @@ export default function App() {
       priority: "high",
     });
     if (navigation.needsPermission) await navigation.requestPermission();
-    await finder.startScanning({ searchQuery, deviceId: selectedDeviceId });
+    await finder.startScanning({ searchQuery, deviceId: selectedDeviceId, model: selectedModel });
   };
 
   const handleStopScanning = async () => {
@@ -240,7 +269,10 @@ export default function App() {
     // Request device orientation permission (iOS 13+)
     if (navigation.needsPermission) {
       const granted = await navigation.requestPermission();
-      console.log("📱 Device orientation permission:", granted ? "granted" : "denied");
+      console.log(
+        "📱 Device orientation permission:",
+        granted ? "granted" : "denied",
+      );
     }
 
     // Play a test beep to confirm audio works
@@ -261,14 +293,10 @@ export default function App() {
         /* ========== SETUP SCREEN ========== */
         <div className="h-full flex flex-col p-6 max-w-md mx-auto justify-center relative">
           {/* Title */}
-          <h1
-            className="text-3xl font-bold mb-1 text-center uppercase tracking-widest neon-text animate-flicker"
-          >
-            Vision Scanner
+          <h1 className="text-3xl font-bold mb-1 text-center uppercase tracking-widest neon-text animate-flicker">
+            Overshoot Scanner
           </h1>
-          <p className="text-center text-sm mb-10 opacity-50 tracking-wide">
-            {"// Target Acquisition System v2.0"}
-          </p>
+          <p className="text-center text-sm mb-10 opacity-50 tracking-wide"></p>
 
           {/* Inputs */}
           <div className="space-y-4 mb-8">
@@ -280,6 +308,17 @@ export default function App() {
               {availableDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
                   {d.label || "Camera"}
+                </option>
+              ))}
+            </select>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="w-full bg-neon-cyan/5 neon-border rounded p-3 text-neutral-300 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
+            >
+              {availableModels.map((m) => (
+                <option key={m.model} value={m.model}>
+                  {m.model}
                 </option>
               ))}
             </select>
@@ -350,7 +389,9 @@ export default function App() {
           {/* Top HUD bar */}
           <div className="absolute top-0 left-0 right-0 z-50 flex items-start justify-between px-4 pt-4">
             <div>
-              <div className="text-sm uppercase tracking-widest opacity-60">Target</div>
+              <div className="text-sm uppercase tracking-widest opacity-60">
+                Target
+              </div>
               <div className="text-lg neon-text font-bold">{searchQuery}</div>
             </div>
             <div className="text-right">

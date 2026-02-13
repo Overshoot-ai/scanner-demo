@@ -35,6 +35,7 @@ export interface FinderCallbacks {
 export interface FinderConfig {
   searchQuery: string;
   deviceId?: string;
+  model?: string;
   apiUrl?: string;
   apiKey?: string;
   onResult?: (result: FinderResult) => void;
@@ -116,14 +117,18 @@ export function useFinder(callbacks: FinderCallbacks) {
       const apiKey = config.apiKey || import.meta.env.VITE_API_KEY || "";
 
       console.log("🔍 Starting vision scanning for:", config.searchQuery);
-      console.log("📷 Using device ID:", config.deviceId || "default (environment)");
+      console.log(
+        "📷 Using device ID:",
+        config.deviceId || "default (environment)",
+      );
 
       const vision = new RealtimeVision({
         ...(config.apiUrl ? { apiUrl: config.apiUrl } : {}),
         apiKey,
         prompt: `You are helping a visually impaired person find: "${config.searchQuery}".
-Analyze the video and determine if the object is visible. Return ONLY JSON with these fields:
-- visible (boolean): is the object clearly visible in frame?
+Analyze the video and determine if the object or action is visible. Return ONLY JSON with these fields:
+Be strict, avoid false positives. An object is only considered visible if it meets all conditionals and adjectives. e.g. if prompt is for red hat, no other hat should count.
+- visible (boolean): is the object or action clearly visible in frame?
 - confidence (number 0-1): how confident are you it's the correct object?
 - distance (string): ONLY if visible=true, estimate distance. For household items: "very close" = within arm's reach (< 1 meter), "close" = 1-2 meters, "medium" = 2-4 meters, "far" = > 4 meters. For large objects like doors/cars, scale proportionally.
 
@@ -135,7 +140,7 @@ Be precise - only set visible=true if you're confident it's the correct object.`
           cameraFacing: "environment",
         },
         backend: "overshoot",
-        model: "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        model: config.model || "Qwen/Qwen3-VL-30B-A3B-Instruct",
         mode: "clip",
         clipProcessing: {
           fps: 30,
