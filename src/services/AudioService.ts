@@ -219,7 +219,7 @@ export class AudioService {
       const now = this.audioContext.currentTime;
       gainNode.gain.cancelScheduledValues(now);
       gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(0.15, now + 0.03);
+      gainNode.gain.linearRampToValueAtTime(0.07, now + 0.03);
       gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
     };
 
@@ -260,7 +260,7 @@ export class AudioService {
     return type === "found" ? 0.4 : 0.08;
   }
   private getDefaultVolume(type: string) {
-    return type === "found" ? 0.3 : 0.15;
+    return type === "found" ? 0.15 : 0.08;
   }
   private applyEnvelope(
     g: GainNode,
