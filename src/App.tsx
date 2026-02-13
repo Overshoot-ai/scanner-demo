@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Settings } from "lucide-react";
 import { useFinder } from "./hooks/useFinder";
 import { useNavigation } from "./hooks/useNavigation";
 import { getAudioService } from "./services/AudioService";
@@ -25,7 +26,7 @@ export default function App() {
   );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
   const [confirmedFound, setConfirmedFound] = useState(false);
-  const [debugMode, setDebugMode] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const audioService = useRef(getAudioService());
   const beepStopRef = useRef<(() => void) | null>(null);
@@ -246,22 +247,35 @@ export default function App() {
     audioService.current.playSound({ type: "found" });
   };
 
+  const confidence = finder.state.result?.confidence ?? 0;
+  const isVisible = finder.state.result?.visible ?? false;
+  const canStart = searchQuery.trim().length > 0;
+
   return (
-    <div className="fixed inset-0 bg-neutral-950 text-neutral-100 overflow-hidden">
+    <div className="fixed inset-0 bg-dark-bg text-neutral-100 overflow-hidden scanlines grid-bg">
       <div className="sr-only" role="status" aria-live="polite">
         {confirmedFound ? `Found ${searchQuery}` : navigation.guidance.text}
       </div>
 
       {!finder.state.isScanning ? (
-        <div className="h-full flex flex-col p-6 max-w-md mx-auto justify-center">
-          <h1 className="text-4xl font-light mb-8 text-center">
+        /* ========== SETUP SCREEN ========== */
+        <div className="h-full flex flex-col p-6 max-w-md mx-auto justify-center relative">
+          {/* Title */}
+          <h1
+            className="text-3xl font-bold mb-1 text-center uppercase tracking-widest neon-text animate-flicker"
+          >
             Vision Scanner
           </h1>
+          <p className="text-center text-sm mb-10 opacity-50 tracking-wide">
+            {"// Target Acquisition System v2.0"}
+          </p>
+
+          {/* Inputs */}
           <div className="space-y-4 mb-8">
             <select
               value={selectedDeviceId}
               onChange={(e) => setSelectedDeviceId(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-700 rounded p-3"
+              className="w-full bg-neon-cyan/5 neon-border rounded p-3 text-neutral-300 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
             >
               {availableDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
@@ -273,59 +287,122 @@ export default function App() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Find something..."
-              className="w-full bg-neutral-900 border border-neutral-700 rounded p-4 text-lg"
+              placeholder="Enter target..."
+              className="w-full bg-neon-cyan/5 neon-border rounded p-4 text-lg text-neutral-100 placeholder-neutral-600 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
             />
           </div>
-          <div className="space-y-3">
+
+          {/* Initialize button */}
+          <button
+            onClick={handleStartScanning}
+            disabled={!canStart}
+            className={`w-full py-4 rounded font-bold text-lg uppercase tracking-wider transition-all duration-300 ${
+              canStart
+                ? "bg-neon-cyan text-black shadow-[0_0_20px_rgba(0,255,247,0.4),0_0_40px_rgba(0,255,247,0.2)] hover:shadow-[0_0_30px_rgba(0,255,247,0.6),0_0_60px_rgba(0,255,247,0.3)]"
+                : "bg-neutral-800 text-neutral-600 cursor-not-allowed"
+            }`}
+          >
+            Initialize Scan
+          </button>
+
+          {/* Settings gear — bottom right */}
+          <div className="absolute bottom-6 right-6">
             <button
-              onClick={handleEnablePermissions}
-              className="w-full py-3 bg-blue-600 rounded font-medium"
+              onClick={() => setSettingsOpen(!settingsOpen)}
+              className="p-2 rounded-full opacity-50 hover:opacity-100 transition-opacity neon-text"
             >
-              Enable Audio & Sensors
+              <Settings size={22} />
             </button>
-            <button
-              onClick={handleTestAudio}
-              className="w-full py-3 bg-neutral-800 rounded"
-            >
-              Test Audio
-            </button>
-            <button
-              onClick={handleStartScanning}
-              className="w-full py-4 bg-white text-black rounded font-bold"
-            >
-              Start Scanning
-            </button>
+
+            {settingsOpen && (
+              <div className="absolute bottom-12 right-0 rounded-lg p-4 space-y-3 w-56 bg-dark-bg/85 backdrop-blur-[12px] border border-neon-cyan/20 shadow-[0_0_20px_rgba(0,255,247,0.1)]">
+                <button
+                  onClick={handleEnablePermissions}
+                  className="w-full py-2 px-3 rounded text-sm neon-border bg-transparent text-neon-cyan hover:bg-neon-cyan/10 transition-colors"
+                >
+                  Enable Audio & Sensors
+                </button>
+                <button
+                  onClick={handleTestAudio}
+                  className="w-full py-2 px-3 rounded text-sm neon-border bg-transparent text-neon-cyan hover:bg-neon-cyan/10 transition-colors"
+                >
+                  Test Audio
+                </button>
+              </div>
+            )}
           </div>
         </div>
       ) : (
+        /* ========== SCANNING SCREEN ========== */
         <div className="relative h-full w-full bg-black">
+          {/* Video — object-contain to show full frame */}
           <video
             ref={finder.getVideoRef()}
             autoPlay
             playsInline
             muted
-            className="absolute inset-0 w-full h-full object-cover opacity-60"
+            className="absolute inset-0 w-full h-full object-contain opacity-60"
           />
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            {navigation.isNavigating && !confirmedFound && (
-              <div className="text-3xl font-bold">
+
+          {/* CRT vignette */}
+          <div className="crt-vignette" />
+
+          {/* Top HUD bar */}
+          <div className="absolute top-0 left-0 right-0 z-50 flex items-start justify-between px-4 pt-4">
+            <div>
+              <div className="text-sm uppercase tracking-widest opacity-60">Target</div>
+              <div className="text-lg neon-text font-bold">{searchQuery}</div>
+            </div>
+            <div className="text-right">
+              <div
+                className={`text-sm uppercase tracking-widest font-bold ${
+                  confirmedFound ? "neon-text-green" : "neon-text"
+                }`}
+              >
+                {confirmedFound ? "LOCKED" : "SCANNING"}
+              </div>
+              {isVisible && (
+                <div className="text-xs opacity-60 mt-0.5">
+                  {Math.round(confidence * 100)}%
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Reticle — always visible */}
+          <div className="absolute inset-0 flex items-center justify-center z-30">
+            <div
+              className={`reticle ${
+                confirmedFound ? "reticle--locked" : "reticle--scanning"
+              }`}
+            >
+              <div className="corner-bl" />
+              <div className="corner-br" />
+              <div className="cross-h" />
+              <div className="cross-v" />
+              {confirmedFound && (
+                <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-sm font-bold uppercase tracking-widest neon-text-green">
+                  Locked
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Navigation guidance */}
+          {navigation.isNavigating && !confirmedFound && (
+            <div className="absolute inset-0 flex items-end justify-center z-30 pb-28">
+              <div className="text-2xl font-bold neon-text uppercase tracking-wider">
                 {navigation.guidance.text}
               </div>
-            )}
-            {confirmedFound && (
-              <div className="border-4 border-green-500 w-64 h-64 flex items-center justify-center animate-pulse">
-                <span className="bg-green-500 text-black px-2 py-1 font-bold">
-                  FOUND
-                </span>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Terminate button */}
           <button
             onClick={handleStopScanning}
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-red-600 px-12 py-4 rounded-full font-bold"
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 px-12 py-4 rounded-full font-bold uppercase tracking-wider bg-transparent border-2 border-neon-red neon-text-red hover:bg-neon-red/15 transition-colors shadow-[0_0_15px_rgba(255,0,60,0.3),inset_0_0_15px_rgba(255,0,60,0.1)]"
           >
-            STOP
+            Terminate
           </button>
         </div>
       )}
