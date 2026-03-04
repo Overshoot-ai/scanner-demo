@@ -32,6 +32,9 @@ export class AudioService {
   private elevenLabsApiKey: string;
   private voiceId: string = "21m00Tcm4TlvDq8ikWAM"; // Rachel voice
   private audioCache: Map<string, string> = new Map(); // text -> blobUrl
+  private currentAudio: HTMLAudioElement | null = null;
+  private speakingTimeout: ReturnType<typeof setTimeout> | null = null;
+  private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     const AudioContextClass =
@@ -102,10 +105,7 @@ export class AudioService {
   }
 
   async speak(request: SpeechRequest): Promise<void> {
-    // Resume audio context if suspended (iOS suspends after inactivity)
-    if (this.audioContext.state === "suspended") {
-      await this.audioContext.resume();
-    }
+    await this.resume();
 
     if (request.priority === "high") {
       this.stopSpeech();
@@ -117,6 +117,7 @@ export class AudioService {
     if (this.elevenLabsApiKey) {
       try {
         this.isSpeaking = true;
+        this.clearSpeakingTimeout();
         let audioUrl = this.audioCache.get(request.text);
 
         if (!audioUrl) {
@@ -128,18 +129,40 @@ export class AudioService {
 
         if (audioUrl) {
           const audio = new Audio(audioUrl);
-          audio.onended = () => {
+          this.currentAudio = audio;
+
+          const cleanup = () => {
             this.isSpeaking = false;
-            // Only revoke if it wasn't from the permanent cache
+            this.currentAudio = null;
+            this.clearSpeakingTimeout();
             if (!this.audioCache.has(request.text)) {
               URL.revokeObjectURL(audioUrl!);
             }
           };
-          await audio.play();
+
+          audio.onended = cleanup;
+          audio.onerror = cleanup;
+
+          // Safety timeout — reset isSpeaking if onended/onerror never fires (iOS)
+          this.speakingTimeout = setTimeout(() => {
+            if (this.isSpeaking) {
+              console.warn("Speech timeout — resetting isSpeaking");
+              cleanup();
+            }
+          }, 10000);
+
+          try {
+            await audio.play();
+          } catch (playError) {
+            console.warn("audio.play() failed:", playError);
+            cleanup();
+            this.speakWithBrowserSynthesis(request);
+          }
           return;
         }
       } catch (error) {
         console.error("ElevenLabs speech error, falling back to browser:", error);
+        this.isSpeaking = false;
       }
     }
 
@@ -166,11 +189,8 @@ export class AudioService {
     window.speechSynthesis.speak(utterance);
   }
 
-  playSound(effect: SoundEffect): void {
-    // Resume audio context if suspended (iOS suspends after inactivity)
-    if (this.audioContext.state === "suspended") {
-      this.audioContext.resume();
-    }
+  async playSound(effect: SoundEffect): Promise<void> {
+    await this.resume();
 
     const oscillator = this.audioContext.createOscillator();
     const gainNode = this.audioContext.createGain();
@@ -197,47 +217,66 @@ export class AudioService {
   }
 
   startContinuousBeep(baseFrequency: number, beepRate: number): () => void {
-    // Resume audio context if suspended (iOS suspends after inactivity)
-    if (this.audioContext.state === "suspended") {
-      this.audioContext.resume();
-    }
+    let stopped = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let oscillator: OscillatorNode | null = null;
+    let gainNode: GainNode | null = null;
 
-    const oscillator = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
-    oscillator.type = "triangle";
-    oscillator.frequency.setValueAtTime(
-      baseFrequency,
-      this.audioContext.currentTime,
-    );
-    gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+    const start = async () => {
+      await this.resume();
+      if (stopped) return;
 
-    oscillator.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
-    oscillator.start();
+      oscillator = this.audioContext.createOscillator();
+      gainNode = this.audioContext.createGain();
+      oscillator.type = "triangle";
+      oscillator.frequency.setValueAtTime(
+        baseFrequency,
+        this.audioContext.currentTime,
+      );
+      gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
 
-    const scheduleBeep = () => {
-      const now = this.audioContext.currentTime;
-      gainNode.gain.cancelScheduledValues(now);
-      gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(0.07, now + 0.03);
-      gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+      oscillator.connect(gainNode);
+      gainNode.connect(this.audioContext.destination);
+      oscillator.start();
+
+      const scheduleBeep = () => {
+        if (!gainNode || stopped) return;
+        // Re-resume if iOS suspended again
+        if (this.audioContext.state === "suspended") {
+          this.audioContext.resume();
+        }
+        const now = this.audioContext.currentTime;
+        gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(0, now);
+        gainNode.gain.linearRampToValueAtTime(0.07, now + 0.03);
+        gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+      };
+
+      scheduleBeep();
+      interval = setInterval(scheduleBeep, Math.max(beepRate * 1500, 300));
     };
 
-    scheduleBeep();
-    const interval = setInterval(scheduleBeep, Math.max(beepRate * 1500, 300));
+    start();
 
     return () => {
-      clearInterval(interval);
-      try {
-        oscillator.stop();
-        oscillator.disconnect();
-      } catch (e) {}
+      stopped = true;
+      if (interval) clearInterval(interval);
+      if (oscillator) {
+        try {
+          oscillator.stop();
+          oscillator.disconnect();
+        } catch (e) {}
+      }
     };
   }
 
   stopSpeech() {
     this.isSpeaking = false;
-    // Cancel browser speech synthesis if active
+    this.clearSpeakingTimeout();
+    if (this.currentAudio) {
+      this.currentAudio.pause();
+      this.currentAudio = null;
+    }
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
@@ -251,6 +290,38 @@ export class AudioService {
     });
     this.activeOscillators = [];
     this.stopSpeech();
+  }
+
+  /**
+   * Keeps iOS AudioContext alive by playing a silent buffer periodically.
+   * Call when scanning starts, stop when scanning ends.
+   */
+  startKeepAlive() {
+    this.stopKeepAlive();
+    this.keepAliveInterval = setInterval(() => {
+      if (this.audioContext.state === "suspended") {
+        this.audioContext.resume();
+      }
+      const buffer = this.audioContext.createBuffer(1, 1, 22050);
+      const source = this.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.audioContext.destination);
+      source.start();
+    }, 4000);
+  }
+
+  stopKeepAlive() {
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+  }
+
+  private clearSpeakingTimeout() {
+    if (this.speakingTimeout) {
+      clearTimeout(this.speakingTimeout);
+      this.speakingTimeout = null;
+    }
   }
 
   private getDefaultFrequency(type: string) {

@@ -255,6 +255,7 @@ export default function App() {
       rate: 1.1,
       priority: "high",
     });
+    audioService.current.startKeepAlive();
     if (navigation.needsPermission) await navigation.requestPermission();
     await finder.startScanning({
       searchQuery,
@@ -269,6 +270,7 @@ export default function App() {
     setConfirmedFound(false);
     if (beepStopRef.current) beepStopRef.current();
     navigation.clearLocation();
+    audioService.current.stopKeepAlive();
     audioService.current.stopAll();
     audioService.current.speak({ text: "Stopped" });
   };
