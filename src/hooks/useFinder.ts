@@ -123,15 +123,13 @@ export function useFinder(callbacks: FinderCallbacks) {
       );
 
       const vision = new RealtimeVision({
-        ...(config.apiUrl ? { apiUrl: config.apiUrl } : {}),
+        ...{ apiUrl: "https://dev-api.overshoot.ai/v0.2" },
         apiKey,
         prompt: `You are helping a visually impaired person find: "${config.searchQuery}".
 Analyze the video and determine if the object or action is visible. Return ONLY JSON with these fields:
 Be strict, avoid false positives. An object is only considered visible if it meets all conditionals and adjectives. e.g. if prompt is for red hat, no other hat should count.
 - visible (boolean): is the object or action clearly visible in frame?
 - confidence (number 0-1): how confident are you it's the correct object?
-- distance (string): ONLY if visible=true, estimate distance. For household items: "very close" = within arm's reach (< 1 meter), "close" = 1-2 meters, "medium" = 2-4 meters, "far" = > 4 meters. For large objects like doors/cars, scale proportionally.
-
 CRITICAL: If visible=false, do NOT include distance or description fields at all. Return only {"visible": false, "confidence": 0}.
 
 Be precise - only set visible=true if you're confident it's the correct object.`,
@@ -153,10 +151,6 @@ Be precise - only set visible=true if you're confident it's the correct object.`
           properties: {
             visible: { type: "boolean" },
             confidence: { type: "number", minimum: 0, maximum: 1 },
-            distance: {
-              type: "string",
-              enum: ["very close", "close", "medium", "far"],
-            },
           },
           required: ["visible", "confidence"],
         },

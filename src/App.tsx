@@ -151,7 +151,9 @@ export default function App() {
     const getDevices = async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) return;
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
         stream.getTracks().forEach((t) => t.stop());
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter((d) => d.kind === "videoinput");
@@ -189,12 +191,15 @@ export default function App() {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const res = await fetch("https://api.overshoot.ai/v0.2/models");
+        const res = await fetch("https://dev-api.overshoot.ai/v0.2/models");
         const data: { model: string; ready: boolean; status: string }[] =
           await res.json();
         const readyModels = data.filter((m) => m.ready);
         setAvailableModels(readyModels);
-        if (readyModels.length > 0 && !readyModels.some((m) => m.model === selectedModel)) {
+        if (
+          readyModels.length > 0 &&
+          !readyModels.some((m) => m.model === selectedModel)
+        ) {
           setSelectedModel(readyModels[0].model);
         }
       } catch (err) {
@@ -240,7 +245,11 @@ export default function App() {
       priority: "high",
     });
     if (navigation.needsPermission) await navigation.requestPermission();
-    await finder.startScanning({ searchQuery, deviceId: selectedDeviceId, model: selectedModel });
+    await finder.startScanning({
+      searchQuery,
+      deviceId: selectedDeviceId,
+      model: selectedModel,
+    });
   };
 
   const handleStopScanning = async () => {
