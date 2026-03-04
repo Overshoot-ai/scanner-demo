@@ -202,7 +202,7 @@ export default function App() {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const res = await fetch("https://dev-api.overshoot.ai/v0.2/models");
+        const res = await fetch("https://api.overshoot.ai/v0.2/models");
         const data: { model: string; ready: boolean; status: string }[] =
           await res.json();
         const readyModels = data.filter((m) => m.ready);

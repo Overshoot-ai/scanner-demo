@@ -123,7 +123,7 @@ export function useFinder(callbacks: FinderCallbacks) {
       );
 
       const vision = new RealtimeVision({
-        ...{ apiUrl: "https://dev-api.overshoot.ai/v0.2" },
+        ...{ apiUrl: "https://api.overshoot.ai/v0.2" },
         apiKey,
         prompt: `You are helping a visually impaired person find: "${config.searchQuery}".
 Analyze the video and determine if the object or action is visible. Return ONLY JSON with these fields:
