@@ -386,7 +386,7 @@ export default function App() {
                     type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="ovs_dev_..."
+                    placeholder="ovs_..."
                     className="w-full bg-neon-cyan/5 neon-border rounded px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
                   />
                 </div>
