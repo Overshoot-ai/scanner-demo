@@ -4,7 +4,10 @@
  * Manages all audio output including:
  * - Pre-synthesized ElevenLabs speech for navigational cues
  * - On-demand ElevenLabs speech for specific search queries
- * - Sound effects via Web Audio API
+ * - Sound effects via generated WAV blobs + HTML5 Audio
+ *
+ * Uses HTML5 Audio for all playback to ensure iOS routes sound
+ * through the main speaker even when a camera MediaStream is active.
  */
 
 type SpeechRequest = {
@@ -18,23 +21,17 @@ type SoundEffect = {
   frequency?: number;
   duration?: number;
   volume?: number;
-  filter?: {
-    type: BiquadFilterType;
-    frequency: number;
-    Q?: number;
-  };
 };
 
 export class AudioService {
   private audioContext: AudioContext;
   private isSpeaking: boolean = false;
-  private activeOscillators: OscillatorNode[] = [];
   private elevenLabsApiKey: string;
   private voiceId: string = "21m00Tcm4TlvDq8ikWAM"; // Rachel voice
   private audioCache: Map<string, string> = new Map(); // text -> blobUrl
   private currentAudio: HTMLAudioElement | null = null;
   private speakingTimeout: ReturnType<typeof setTimeout> | null = null;
-  private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
+  private toneCache: Map<string, string> = new Map(); // cache key -> blob URL
 
   constructor() {
     const AudioContextClass =
@@ -43,7 +40,7 @@ export class AudioService {
     this.elevenLabsApiKey = import.meta.env.VITE_ELEVENLABS_API_KEY || "";
 
     if (!this.elevenLabsApiKey) {
-      console.warn("⚠️ ElevenLabs API key not found.");
+      console.warn("ElevenLabs API key not found.");
     }
   }
 
@@ -53,7 +50,7 @@ export class AudioService {
   async preSynthesizePhrases(phrases: string[]) {
     if (!this.elevenLabsApiKey) return;
 
-    console.log("🎙️ Pre-synthesizing navigation phrases...");
+    console.log("Pre-synthesizing navigation phrases...");
     const promises = phrases.map(async (text) => {
       if (this.audioCache.has(text)) return;
       try {
@@ -65,7 +62,7 @@ export class AudioService {
     });
 
     await Promise.allSettled(promises);
-    console.log("✅ Pre-synthesis complete");
+    console.log("Pre-synthesis complete");
   }
 
   private async fetchSpeechBlobUrl(
@@ -161,7 +158,10 @@ export class AudioService {
           return;
         }
       } catch (error) {
-        console.error("ElevenLabs speech error, falling back to browser:", error);
+        console.error(
+          "ElevenLabs speech error, falling back to browser:",
+          error,
+        );
         this.isSpeaking = false;
       }
     }
@@ -189,90 +189,63 @@ export class AudioService {
     window.speechSynthesis.speak(utterance);
   }
 
+  /**
+   * Play a one-shot sound effect via HTML5 Audio (works on iOS speaker with camera).
+   */
   async playSound(effect: SoundEffect): Promise<void> {
-    await this.resume();
+    const frequency =
+      effect.frequency || (effect.type === "found" ? 523.25 : 350);
+    const duration = effect.duration || (effect.type === "found" ? 0.4 : 0.08);
+    const volume = effect.volume || (effect.type === "found" ? 0.15 : 0.08);
+    const waveform = effect.type === "found" ? "sine" : "triangle";
 
-    const oscillator = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
-    oscillator.type = effect.type === "found" ? "sine" : "triangle";
-
-    oscillator.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
-
-    const frequency = effect.frequency || this.getDefaultFrequency(effect.type);
-    oscillator.frequency.setValueAtTime(
+    const url = this.getToneUrl(
       frequency,
-      this.audioContext.currentTime,
+      duration,
+      volume,
+      waveform as "sine" | "triangle",
     );
-
-    const now = this.audioContext.currentTime;
-    const duration = effect.duration || this.getDefaultDuration(effect.type);
-    const volume = effect.volume || this.getDefaultVolume(effect.type);
-
-    this.applyEnvelope(gainNode, now, duration, volume, effect.type);
-
-    oscillator.start(now);
-    oscillator.stop(now + duration);
-    this.activeOscillators.push(oscillator);
+    const audio = new Audio(url);
+    try {
+      await audio.play();
+    } catch (e) {
+      console.warn("playSound failed:", e);
+    }
   }
 
+  /**
+   * Start continuous beeping via HTML5 Audio. Returns handle to update or stop.
+   * Uses a single reusable Audio element — no oscillator creation churn.
+   */
   startContinuousBeep(
     baseFrequency: number,
     beepRate: number,
   ): { update(frequency: number, rate: number): void; stop(): void } {
     let stopped = false;
     let interval: ReturnType<typeof setInterval> | null = null;
-    let oscillator: OscillatorNode | null = null;
-    let gainNode: GainNode | null = null;
     let currentRate = beepRate;
+    let currentUrl = this.getToneUrl(baseFrequency, 0.1, 0.07, "triangle");
+    const beepAudio = new Audio();
 
-    const scheduleBeep = () => {
-      if (!gainNode || stopped) return;
-      if (this.audioContext.state === "suspended") {
-        this.audioContext.resume();
-      }
-      const now = this.audioContext.currentTime;
-      gainNode.gain.cancelScheduledValues(now);
-      gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(0.07, now + 0.03);
-      gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+    const playBeep = () => {
+      if (stopped) return;
+      beepAudio.src = currentUrl;
+      beepAudio.currentTime = 0;
+      beepAudio.play().catch(() => {});
     };
 
     const resetInterval = () => {
       if (interval) clearInterval(interval);
-      interval = setInterval(scheduleBeep, Math.max(currentRate * 1500, 300));
+      interval = setInterval(playBeep, Math.max(currentRate * 1500, 300));
     };
 
-    const start = async () => {
-      await this.resume();
-      if (stopped) return;
-
-      oscillator = this.audioContext.createOscillator();
-      gainNode = this.audioContext.createGain();
-      oscillator.type = "triangle";
-      oscillator.frequency.setValueAtTime(
-        baseFrequency,
-        this.audioContext.currentTime,
-      );
-      gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
-
-      oscillator.connect(gainNode);
-      gainNode.connect(this.audioContext.destination);
-      oscillator.start();
-
-      scheduleBeep();
-      resetInterval();
-    };
-
-    start();
+    playBeep();
+    resetInterval();
 
     return {
       update: (frequency: number, rate: number) => {
-        if (stopped || !oscillator) return;
-        oscillator.frequency.setValueAtTime(
-          frequency,
-          this.audioContext.currentTime,
-        );
+        if (stopped) return;
+        currentUrl = this.getToneUrl(frequency, 0.1, 0.07, "triangle");
         if (rate !== currentRate) {
           currentRate = rate;
           resetInterval();
@@ -281,12 +254,7 @@ export class AudioService {
       stop: () => {
         stopped = true;
         if (interval) clearInterval(interval);
-        if (oscillator) {
-          try {
-            oscillator.stop();
-            oscillator.disconnect();
-          } catch (e) {}
-        }
+        beepAudio.pause();
       },
     };
   }
@@ -304,38 +272,7 @@ export class AudioService {
   }
 
   stopAll() {
-    this.activeOscillators.forEach((o) => {
-      try {
-        o.stop();
-      } catch (e) {}
-    });
-    this.activeOscillators = [];
     this.stopSpeech();
-  }
-
-  /**
-   * Keeps iOS AudioContext alive by playing a silent buffer periodically.
-   * Call when scanning starts, stop when scanning ends.
-   */
-  startKeepAlive() {
-    this.stopKeepAlive();
-    this.keepAliveInterval = setInterval(() => {
-      if (this.audioContext.state === "suspended") {
-        this.audioContext.resume();
-      }
-      const buffer = this.audioContext.createBuffer(1, 1, 22050);
-      const source = this.audioContext.createBufferSource();
-      source.buffer = buffer;
-      source.connect(this.audioContext.destination);
-      source.start();
-    }, 4000);
-  }
-
-  stopKeepAlive() {
-    if (this.keepAliveInterval) {
-      clearInterval(this.keepAliveInterval);
-      this.keepAliveInterval = null;
-    }
   }
 
   private clearSpeakingTimeout() {
@@ -345,25 +282,82 @@ export class AudioService {
     }
   }
 
-  private getDefaultFrequency(type: string) {
-    return type === "found" ? 523.25 : 350;
+  /**
+   * Get a cached blob URL for a tone with given parameters.
+   * Quantizes frequency to 50Hz steps to limit cache entries.
+   */
+  private getToneUrl(
+    frequency: number,
+    duration: number,
+    volume: number,
+    waveform: "sine" | "triangle",
+  ): string {
+    const qFreq = Math.round(frequency / 50) * 50 || 50;
+    const key = `${waveform}-${qFreq}-${duration}-${volume}`;
+    let url = this.toneCache.get(key);
+    if (!url) {
+      url = URL.createObjectURL(
+        this.generateToneWav(qFreq, duration, volume, waveform),
+      );
+      this.toneCache.set(key, url);
+    }
+    return url;
   }
-  private getDefaultDuration(type: string) {
-    return type === "found" ? 0.4 : 0.08;
-  }
-  private getDefaultVolume(type: string) {
-    return type === "found" ? 0.15 : 0.08;
-  }
-  private applyEnvelope(
-    g: GainNode,
-    s: number,
-    d: number,
-    v: number,
-    _t: string,
-  ) {
-    g.gain.setValueAtTime(0, s);
-    g.gain.linearRampToValueAtTime(v, s + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.01, s + d);
+
+  /**
+   * Render a tone to a PCM WAV blob.
+   */
+  private generateToneWav(
+    frequency: number,
+    duration: number,
+    volume: number,
+    waveform: "sine" | "triangle",
+  ): Blob {
+    const sampleRate = 22050;
+    const numSamples = Math.floor(sampleRate * duration);
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+
+    // WAV header
+    const w = (o: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+    };
+    w(0, "RIFF");
+    view.setUint32(4, 36 + numSamples * 2, true);
+    w(8, "WAVE");
+    w(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    w(36, "data");
+    view.setUint32(40, numSamples * 2, true);
+
+    // Render samples
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sampleRate;
+
+      // Waveform
+      let wave: number;
+      if (waveform === "triangle") {
+        wave = 2 * Math.abs(2 * ((t * frequency) % 1) - 1) - 1;
+      } else {
+        wave = Math.sin(2 * Math.PI * frequency * t);
+      }
+
+      // Envelope: 20ms fade-in, exponential decay over duration
+      const fadeIn = Math.min(1, i / (sampleRate * 0.02));
+      const decay = Math.exp((-3 * t) / duration);
+      const sample = wave * fadeIn * decay * volume;
+
+      const clamped = Math.max(-32768, Math.min(32767, sample * 32767));
+      view.setInt16(44 + i * 2, clamped, true);
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
   }
 }
 
