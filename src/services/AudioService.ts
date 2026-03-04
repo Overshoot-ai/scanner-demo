@@ -216,11 +216,32 @@ export class AudioService {
     this.activeOscillators.push(oscillator);
   }
 
-  startContinuousBeep(baseFrequency: number, beepRate: number): () => void {
+  startContinuousBeep(
+    baseFrequency: number,
+    beepRate: number,
+  ): { update(frequency: number, rate: number): void; stop(): void } {
     let stopped = false;
     let interval: ReturnType<typeof setInterval> | null = null;
     let oscillator: OscillatorNode | null = null;
     let gainNode: GainNode | null = null;
+    let currentRate = beepRate;
+
+    const scheduleBeep = () => {
+      if (!gainNode || stopped) return;
+      if (this.audioContext.state === "suspended") {
+        this.audioContext.resume();
+      }
+      const now = this.audioContext.currentTime;
+      gainNode.gain.cancelScheduledValues(now);
+      gainNode.gain.setValueAtTime(0, now);
+      gainNode.gain.linearRampToValueAtTime(0.07, now + 0.03);
+      gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
+    };
+
+    const resetInterval = () => {
+      if (interval) clearInterval(interval);
+      interval = setInterval(scheduleBeep, Math.max(currentRate * 1500, 300));
+    };
 
     const start = async () => {
       await this.resume();
@@ -239,34 +260,34 @@ export class AudioService {
       gainNode.connect(this.audioContext.destination);
       oscillator.start();
 
-      const scheduleBeep = () => {
-        if (!gainNode || stopped) return;
-        // Re-resume if iOS suspended again
-        if (this.audioContext.state === "suspended") {
-          this.audioContext.resume();
-        }
-        const now = this.audioContext.currentTime;
-        gainNode.gain.cancelScheduledValues(now);
-        gainNode.gain.setValueAtTime(0, now);
-        gainNode.gain.linearRampToValueAtTime(0.07, now + 0.03);
-        gainNode.gain.linearRampToValueAtTime(0, now + 0.1);
-      };
-
       scheduleBeep();
-      interval = setInterval(scheduleBeep, Math.max(beepRate * 1500, 300));
+      resetInterval();
     };
 
     start();
 
-    return () => {
-      stopped = true;
-      if (interval) clearInterval(interval);
-      if (oscillator) {
-        try {
-          oscillator.stop();
-          oscillator.disconnect();
-        } catch (e) {}
-      }
+    return {
+      update: (frequency: number, rate: number) => {
+        if (stopped || !oscillator) return;
+        oscillator.frequency.setValueAtTime(
+          frequency,
+          this.audioContext.currentTime,
+        );
+        if (rate !== currentRate) {
+          currentRate = rate;
+          resetInterval();
+        }
+      },
+      stop: () => {
+        stopped = true;
+        if (interval) clearInterval(interval);
+        if (oscillator) {
+          try {
+            oscillator.stop();
+            oscillator.disconnect();
+          } catch (e) {}
+        }
+      },
     };
   }
 

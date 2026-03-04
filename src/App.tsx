@@ -38,7 +38,7 @@ export default function App() {
   );
 
   const audioService = useRef(getAudioService());
-  const beepStopRef = useRef<(() => void) | null>(null);
+  const beepRef = useRef<{ update(f: number, r: number): void; stop(): void } | null>(null);
   const searchQueryRef = useRef(searchQuery);
   const navigationRef = useRef<any>(null);
   const finderRef = useRef<any>(null);
@@ -220,31 +220,27 @@ export default function App() {
     fetchModels();
   }, []);
 
-  // Beeping Logic
+  // Beeping Logic — single oscillator, update frequency/rate in place
   useEffect(() => {
-    const cleanup = () => {
-      if (beepStopRef.current) {
-        beepStopRef.current();
-        beepStopRef.current = null;
-      }
-    };
-
     if (
       finder.state.isScanning &&
       finder.state.result?.visible &&
       finder.state.result.confidence >= 0.3
     ) {
-      cleanup();
       const baseFreq = 200 + finder.state.result.confidence * 600;
       const rate = Math.max(0.1, 1.2 - finder.state.result.confidence);
-      beepStopRef.current = audioService.current.startContinuousBeep(
-        baseFreq,
-        rate,
-      );
-    } else {
-      cleanup();
+      if (beepRef.current) {
+        beepRef.current.update(baseFreq, rate);
+      } else {
+        beepRef.current = audioService.current.startContinuousBeep(
+          baseFreq,
+          rate,
+        );
+      }
+    } else if (beepRef.current) {
+      beepRef.current.stop();
+      beepRef.current = null;
     }
-    return cleanup;
   }, [finder.state.isScanning, finder.state.result]);
 
   const handleStartScanning = async () => {
@@ -268,7 +264,7 @@ export default function App() {
   const handleStopScanning = async () => {
     await finder.stopScanning();
     setConfirmedFound(false);
-    if (beepStopRef.current) beepStopRef.current();
+    if (beepRef.current) { beepRef.current.stop(); beepRef.current = null; }
     navigation.clearLocation();
     audioService.current.stopKeepAlive();
     audioService.current.stopAll();
