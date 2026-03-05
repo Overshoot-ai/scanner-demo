@@ -35,7 +35,7 @@ export interface FinderCallbacks {
 export interface FinderConfig {
   searchQuery: string;
   deviceId?: string;
-  model?: string;
+
   apiUrl?: string;
   apiKey?: string;
   onResult?: (result: FinderResult) => void;
@@ -138,7 +138,7 @@ Be precise - only set visible=true if you're confident it's the correct object.`
           cameraFacing: "environment",
         },
         backend: "overshoot",
-        model: config.model || "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        model: "Qwen/Qwen3.5-9B",
         mode: "clip",
         clipProcessing: {
           fps: 30,

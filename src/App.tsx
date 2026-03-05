@@ -25,17 +25,9 @@ export default function App() {
     [],
   );
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
-  const [availableModels, setAvailableModels] = useState<
-    { model: string; ready: boolean }[]
-  >([]);
-  const [selectedModel, setSelectedModel] = useState<string>(
-    "Qwen/Qwen3-VL-30B-A3B-Instruct",
-  );
   const [confirmedFound, setConfirmedFound] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [apiKey, setApiKey] = useState(
-    () => localStorage.getItem("overshoot_api_key") || "",
-  );
+
 
   const audioService = useRef(getAudioService());
   const beepRef = useRef<{ update(f: number, r: number): void; stop(): void } | null>(null);
@@ -46,14 +38,6 @@ export default function App() {
   useEffect(() => {
     searchQueryRef.current = searchQuery;
   }, [searchQuery]);
-
-  useEffect(() => {
-    if (apiKey) {
-      localStorage.setItem("overshoot_api_key", apiKey);
-    } else {
-      localStorage.removeItem("overshoot_api_key");
-    }
-  }, [apiKey]);
 
   // Initialize and Pre-synthesize
   useEffect(() => {
@@ -198,28 +182,6 @@ export default function App() {
     getDevices();
   }, []);
 
-  // Model Enumeration
-  useEffect(() => {
-    const fetchModels = async () => {
-      try {
-        const res = await fetch("https://api.overshoot.ai/v0.2/models");
-        const data: { model: string; ready: boolean; status: string }[] =
-          await res.json();
-        const readyModels = data.filter((m) => m.ready);
-        setAvailableModels(readyModels);
-        if (
-          readyModels.length > 0 &&
-          !readyModels.some((m) => m.model === selectedModel)
-        ) {
-          setSelectedModel(readyModels[0].model);
-        }
-      } catch (err) {
-        console.error("Failed to fetch models:", err);
-      }
-    };
-    fetchModels();
-  }, []);
-
   // Beeping Logic — single oscillator, update frequency/rate in place
   useEffect(() => {
     if (
@@ -255,8 +217,8 @@ export default function App() {
     await finder.startScanning({
       searchQuery,
       deviceId: selectedDeviceId,
-      model: selectedModel,
-      apiKey: apiKey || undefined,
+
+
     });
   };
 
@@ -299,8 +261,7 @@ export default function App() {
 
   const confidence = finder.state.result?.confidence ?? 0;
   const isVisible = finder.state.result?.visible ?? false;
-  const hasApiKey = !!(apiKey || import.meta.env.VITE_API_KEY);
-  const canStart = searchQuery.trim().length > 0 && hasApiKey;
+  const canStart = searchQuery.trim().length > 0;
 
   return (
     <div className="fixed inset-0 bg-dark-bg text-neutral-100 overflow-hidden scanlines grid-bg">
@@ -327,17 +288,6 @@ export default function App() {
               {availableDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
                   {d.label || "Camera"}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full bg-neon-cyan/5 neon-border rounded p-3 text-neutral-300 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
-            >
-              {availableModels.map((m) => (
-                <option key={m.model} value={m.model}>
-                  {m.model}
                 </option>
               ))}
             </select>
@@ -374,18 +324,6 @@ export default function App() {
 
             {settingsOpen && (
               <div className="absolute bottom-12 right-0 rounded-lg p-4 space-y-3 w-56 bg-dark-bg/85 backdrop-blur-[12px] border border-neon-cyan/20 shadow-[0_0_20px_rgba(0,255,247,0.1)]">
-                <div>
-                  <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-1">
-                    API Key
-                  </label>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="ovs_..."
-                    className="w-full bg-neon-cyan/5 neon-border rounded px-3 py-2 text-sm text-neutral-100 placeholder-neutral-600 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
-                  />
-                </div>
                 <button
                   onClick={handleEnablePermissions}
                   className="w-full py-2 px-3 rounded text-sm neon-border bg-transparent text-neon-cyan hover:bg-neon-cyan/10 transition-colors"
