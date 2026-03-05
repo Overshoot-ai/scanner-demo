@@ -114,7 +114,7 @@ export function useFinder(callbacks: FinderCallbacks) {
     }
 
     try {
-      const apiKey = config.apiKey || import.meta.env.VITE_API_KEY || "";
+      const apiKey = config.apiKey || import.meta.env.VITE_OVERSHOOT_API_KEY || "";
 
       console.log("🔍 Starting vision scanning for:", config.searchQuery);
       console.log(
