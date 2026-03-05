@@ -21,10 +21,6 @@ const NAV_PHRASES = [
 
 export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>(
-    [],
-  );
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
   const [confirmedFound, setConfirmedFound] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -141,47 +137,6 @@ export default function App() {
     navigationRef.current = navigation;
   }, [navigation]);
 
-  // Device Enumeration
-  useEffect(() => {
-    const getDevices = async () => {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) return;
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-        });
-        stream.getTracks().forEach((t) => t.stop());
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter((d) => d.kind === "videoinput");
-        console.log(
-          "Available cameras:",
-          videoDevices.map((d) => ({ label: d.label, id: d.deviceId })),
-        );
-        setAvailableDevices(videoDevices);
-        // Prioritize iPhone camera, then Meta/Ray-Ban, then any back camera
-        const iphone = videoDevices.find((d) => /iphone|ios/i.test(d.label));
-        const meta = videoDevices.find((d) =>
-          /meta|ray-ban|back|environment/i.test(d.label),
-        );
-        if (iphone) {
-          console.log("Selected iPhone camera:", iphone.label);
-          setSelectedDeviceId(iphone.deviceId);
-        } else if (meta) {
-          console.log("Selected Meta/back camera:", meta.label);
-          setSelectedDeviceId(meta.deviceId);
-        } else if (videoDevices.length > 0) {
-          console.log(
-            "Selected first available camera:",
-            videoDevices[0].label,
-          );
-          setSelectedDeviceId(videoDevices[0].deviceId);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    getDevices();
-  }, []);
-
   // Beeping Logic — single oscillator, update frequency/rate in place
   useEffect(() => {
     if (
@@ -216,9 +171,6 @@ export default function App() {
     if (navigation.needsPermission) await navigation.requestPermission();
     await finder.startScanning({
       searchQuery,
-      deviceId: selectedDeviceId,
-
-
     });
   };
 
@@ -280,17 +232,6 @@ export default function App() {
 
           {/* Inputs */}
           <div className="space-y-4 mb-8">
-            <select
-              value={selectedDeviceId}
-              onChange={(e) => setSelectedDeviceId(e.target.value)}
-              className="w-full bg-neon-cyan/5 neon-border rounded p-3 text-neutral-300 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
-            >
-              {availableDevices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || "Camera"}
-                </option>
-              ))}
-            </select>
             <input
               type="text"
               value={searchQuery}
