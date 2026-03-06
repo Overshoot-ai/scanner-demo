@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Settings } from "lucide-react";
+
 import { useFinder } from "./hooks/useFinder";
 import { useNavigation } from "./hooks/useNavigation";
 import { getAudioService } from "./services/AudioService";
@@ -22,7 +22,7 @@ const NAV_PHRASES = [
 export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmedFound, setConfirmedFound] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+
 
 
   const audioService = useRef(getAudioService());
@@ -50,12 +50,19 @@ export default function App() {
     initAudio();
   }, []);
 
-  // First detection - sound only
+  // Accumulate orientation readings across consecutive detections
+  const orientationReadingsRef = useRef<{ heading: number; beta: number; gamma: number }[]>([]);
+
+  // First detection - sound only + record orientation
   const handleFoundSound = useCallback((_result: any) => {
     audioService.current.playSound({ type: "found" });
+    const o = navigationRef.current?.getOrientation();
+    if (o?.heading != null && o?.beta != null && o?.gamma != null) {
+      orientationReadingsRef.current = [{ heading: o.heading, beta: o.beta, gamma: o.gamma }];
+    }
   }, []);
 
-  // Confirmed detection (2+ consecutive) - speech + UI
+  // Confirmed detection (2+ consecutive) - speech + UI, use averaged coords
   const handleFoundConfirmed = useCallback((result: any) => {
     setConfirmedFound(true);
     audioService.current.speak({
@@ -69,10 +76,25 @@ export default function App() {
       searchQueryRef.current &&
       navigationRef.current
     ) {
-      navigationRef.current.markLocation(
-        searchQueryRef.current,
-        result.confidence,
-      );
+      // Record this frame's orientation too
+      const o = navigationRef.current.getOrientation();
+      if (o?.heading != null && o?.beta != null && o?.gamma != null) {
+        orientationReadingsRef.current.push({ heading: o.heading, beta: o.beta, gamma: o.gamma });
+      }
+
+      // Average all accumulated readings
+      const readings = orientationReadingsRef.current;
+      if (readings.length > 0) {
+        const avg = {
+          heading: readings.reduce((s, r) => s + r.heading, 0) / readings.length,
+          beta: readings.reduce((s, r) => s + r.beta, 0) / readings.length,
+          gamma: readings.reduce((s, r) => s + r.gamma, 0) / readings.length,
+        };
+        navigationRef.current.markLocation(searchQueryRef.current, result.confidence, avg);
+      } else {
+        navigationRef.current.markLocation(searchQueryRef.current, result.confidence);
+      }
+      orientationReadingsRef.current = [];
     }
   }, []);
 
@@ -99,6 +121,16 @@ export default function App() {
         priority: "high",
       });
     }
+  }, []);
+
+  const handleItemMissing = useCallback(() => {
+    audioService.current.speak({
+      text: "Uh oh, item may have moved or was incorrectly identified. Sorry.",
+      rate: 1.0,
+      priority: "high",
+    });
+    navigationRef.current?.clearLocation();
+    setConfirmedFound(false);
   }, []);
 
   const handleLocationMarked = useCallback(() => {
@@ -130,6 +162,7 @@ export default function App() {
   const navigation = useNavigation({
     onGuidanceChange: handleGuidanceChange,
     onLocationMarked: handleLocationMarked,
+    onItemMissing: handleItemMissing,
     isObjectVisible: () => finderRef.current?.state.result?.visible ?? false,
   });
 
@@ -162,13 +195,12 @@ export default function App() {
 
   const handleStartScanning = async () => {
     if (!searchQuery.trim()) return;
-    await audioService.current.resume();
+
     audioService.current.speak({
       text: `Looking for ${searchQuery}`,
       rate: 1.1,
       priority: "high",
     });
-    if (navigation.needsPermission) await navigation.requestPermission();
     await finder.startScanning({
       searchQuery,
     });
@@ -183,20 +215,17 @@ export default function App() {
     audioService.current.speak({ text: "Stopped" });
   };
 
-  const handleTestAudio = async () => {
-    await audioService.current.resume();
-    // This text is included in NAV_PHRASES for zero-latency testing
-    audioService.current.speak({
-      text: "Voice check. Left. Right. Center.",
-      priority: "high",
-    });
-    audioService.current.playSound({ type: "found" });
-  };
+  const [audioReady, setAudioReady] = useState(false);
 
   const handleEnablePermissions = async () => {
     // Resume audio context (required for iOS)
     await audioService.current.resume();
     console.log("✅ Audio context resumed");
+
+    // Prime speechSynthesis on user gesture
+    const primer = new SpeechSynthesisUtterance(" ");
+    primer.volume = 0;
+    window.speechSynthesis.speak(primer);
 
     // Request device orientation permission (iOS 13+)
     if (navigation.needsPermission) {
@@ -206,6 +235,8 @@ export default function App() {
         granted ? "granted" : "denied",
       );
     }
+
+    setAudioReady(true);
 
     // Play a test beep to confirm audio works
     audioService.current.playSound({ type: "found" });
@@ -224,11 +255,13 @@ export default function App() {
       {!finder.state.isScanning ? (
         /* ========== SETUP SCREEN ========== */
         <div className="h-full flex flex-col p-6 max-w-md mx-auto justify-center relative">
-          {/* Title */}
-          <h1 className="text-3xl font-bold mb-1 text-center uppercase tracking-widest neon-text animate-flicker">
-            Overshoot Scanner
-          </h1>
-          <p className="text-center text-sm mb-10 opacity-50 tracking-wide"></p>
+          {/* Guide */}
+          <div className="mb-8 space-y-2 text-sm opacity-70 leading-relaxed">
+            <h1 className="text-lg font-bold neon-text mb-3">How it works</h1>
+            <p>Type what you're looking for — anything around you like "red mug" or "my keys".</p>
+            <p>Point your camera and slowly sweep around. Beeping means the item is in view — faster and higher beeping means a stronger match.</p>
+            <p>You'll hear voice directions to guide you back if you look away.</p>
+          </div>
 
           {/* Inputs */}
           <div className="space-y-4 mb-8">
@@ -237,16 +270,27 @@ export default function App() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Enter target..."
+              aria-label="Enter item to search for"
               className="w-full bg-neon-cyan/5 neon-border rounded p-4 text-lg text-neutral-100 placeholder-neutral-600 outline-none focus:shadow-[0_0_12px_rgba(0,255,247,0.3)]"
             />
           </div>
 
-          {/* Initialize button */}
+          {/* Enable Audio button — must be tapped first */}
+          {!audioReady && (
+            <button
+              onClick={handleEnablePermissions}
+              className="w-full py-4 mb-3 rounded font-bold text-lg uppercase tracking-wider border-2 border-neon-cyan bg-transparent text-neon-cyan hover:bg-neon-cyan/10 transition-colors"
+            >
+              Enable Audio & Sensors
+            </button>
+          )}
+
+          {/* Initialize button — only available after audio is ready */}
           <button
             onClick={handleStartScanning}
-            disabled={!canStart}
+            disabled={!canStart || !audioReady}
             className={`w-full py-4 rounded font-bold text-lg uppercase tracking-wider transition-all duration-300 ${
-              canStart
+              canStart && audioReady
                 ? "bg-neon-cyan text-black shadow-[0_0_20px_rgba(0,255,247,0.4),0_0_40px_rgba(0,255,247,0.2)] hover:shadow-[0_0_30px_rgba(0,255,247,0.6),0_0_60px_rgba(0,255,247,0.3)]"
                 : "bg-neutral-800 text-neutral-600 cursor-not-allowed"
             }`}
@@ -254,32 +298,6 @@ export default function App() {
             Initialize Scan
           </button>
 
-          {/* Settings gear — bottom right */}
-          <div className="absolute bottom-6 right-6">
-            <button
-              onClick={() => setSettingsOpen(!settingsOpen)}
-              className="p-2 rounded-full opacity-50 hover:opacity-100 transition-opacity neon-text"
-            >
-              <Settings size={22} />
-            </button>
-
-            {settingsOpen && (
-              <div className="absolute bottom-12 right-0 rounded-lg p-4 space-y-3 w-56 bg-dark-bg/85 backdrop-blur-[12px] border border-neon-cyan/20 shadow-[0_0_20px_rgba(0,255,247,0.1)]">
-                <button
-                  onClick={handleEnablePermissions}
-                  className="w-full py-2 px-3 rounded text-sm neon-border bg-transparent text-neon-cyan hover:bg-neon-cyan/10 transition-colors"
-                >
-                  Enable Audio & Sensors
-                </button>
-                <button
-                  onClick={handleTestAudio}
-                  className="w-full py-2 px-3 rounded text-sm neon-border bg-transparent text-neon-cyan hover:bg-neon-cyan/10 transition-colors"
-                >
-                  Test Audio
-                </button>
-              </div>
-            )}
-          </div>
         </div>
       ) : (
         /* ========== SCANNING SCREEN ========== */
@@ -293,11 +311,28 @@ export default function App() {
             className="absolute inset-0 w-full h-full object-contain opacity-60"
           />
 
+          {/* Debug overlay */}
+          {import.meta.env.DEV && navigation.isNavigating && (
+            <div className="absolute top-16 left-4 z-50 text-xs font-mono opacity-70 space-y-1">
+              <div>Target: {navigation.itemLocation?.heading.toFixed(1)}° heading, {navigation.itemLocation?.beta.toFixed(1)}° tilt</div>
+              <div>Current: {navigation.getOrientation().heading?.toFixed(1)}° heading, {navigation.getOrientation().beta?.toFixed(1)}° tilt</div>
+              <div>Diff: {navigation.itemLocation && navigation.getOrientation().heading != null
+                ? (() => {
+                    let d = navigation.itemLocation.heading - navigation.getOrientation().heading!;
+                    if (d > 180) d -= 360;
+                    if (d < -180) d += 360;
+                    return d.toFixed(1);
+                  })()
+                : "—"}°</div>
+              <div>Direction: {navigation.guidance.direction || "—"}</div>
+            </div>
+          )}
+
           {/* CRT vignette */}
-          <div className="crt-vignette" />
+          <div className="crt-vignette" aria-hidden="true" />
 
           {/* Top HUD bar */}
-          <div className="absolute top-0 left-0 right-0 z-50 flex items-start justify-between px-4 pt-4">
+          <div aria-hidden="true" className="absolute top-0 left-0 right-0 z-50 flex items-start justify-between px-4 pt-4">
             <div>
               <div className="text-sm uppercase tracking-widest opacity-60">
                 Target
@@ -321,7 +356,7 @@ export default function App() {
           </div>
 
           {/* Reticle — always visible */}
-          <div className="absolute inset-0 flex items-center justify-center z-30">
+          <div aria-hidden="true" className="absolute inset-0 flex items-center justify-center z-30">
             <div
               className={`reticle ${
                 confirmedFound ? "reticle--locked" : "reticle--scanning"
@@ -341,7 +376,7 @@ export default function App() {
 
           {/* Navigation guidance */}
           {navigation.isNavigating && !confirmedFound && (
-            <div className="absolute inset-0 flex items-end justify-center z-30 pb-28">
+            <div aria-hidden="true" className="absolute inset-0 flex items-end justify-center z-30 pb-28">
               <div className="text-2xl font-bold neon-text uppercase tracking-wider">
                 {navigation.guidance.text}
               </div>
@@ -351,6 +386,7 @@ export default function App() {
           {/* Terminate button */}
           <button
             onClick={handleStopScanning}
+            aria-label="Stop scanning"
             className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 px-12 py-4 rounded-full font-bold uppercase tracking-wider bg-transparent border-2 border-neon-red neon-text-red hover:bg-neon-red/15 transition-colors shadow-[0_0_15px_rgba(255,0,60,0.3),inset_0_0_15px_rgba(255,0,60,0.1)]"
           >
             Terminate

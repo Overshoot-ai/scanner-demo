@@ -34,6 +34,7 @@ export interface NavigationGuidance {
 export interface NavigationCallbacks {
   onGuidanceChange: (guidance: NavigationGuidance) => void;
   onLocationMarked: () => void;
+  onItemMissing?: () => void;
   isObjectVisible?: () => boolean; // Function to check if object is currently visible
 }
 
@@ -51,8 +52,10 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
 
   const lastGuidanceRef = useRef<string>("");
   const lastGuidanceTimeRef = useRef<number>(0);
+  const centerMissCountRef = useRef<number>(0);
   const callbacksRef = useRef(callbacks);
   const GUIDANCE_COOLDOWN_MS = 1500; // Repeat every 1.5 seconds
+  const REQUIRED_CENTER_MISSES = 3;
 
   // Keep callbacks ref in sync but don't trigger re-renders
   useEffect(() => {
@@ -115,12 +118,16 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
   /**
    * Mark current location (when item is found)
    */
-  const markLocation = (searchQuery: string, confidence: number = 1.0) => {
-    if (
-      currentHeading === null ||
-      currentBeta === null ||
-      currentGamma === null
-    ) {
+  const markLocation = (
+    searchQuery: string,
+    confidence: number = 1.0,
+    coords?: { heading: number; beta: number; gamma: number },
+  ) => {
+    const heading = coords?.heading ?? currentHeading;
+    const beta = coords?.beta ?? currentBeta;
+    const gamma = coords?.gamma ?? currentGamma;
+
+    if (heading === null || beta === null || gamma === null) {
       console.warn("⚠️ Cannot mark location - orientation data not available");
       return false;
     }
@@ -131,9 +138,9 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
     }
 
     const location: ItemLocation = {
-      heading: currentHeading,
-      beta: currentBeta,
-      gamma: currentGamma,
+      heading,
+      beta,
+      gamma,
       timestamp: Date.now(),
       searchQuery,
     };
@@ -235,6 +242,20 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
     }
 
     setGuidance(newGuidance);
+
+    // Track center misses — if we're at center but object isn't visible
+    // Disabled until we figure out the right threshold/approach
+    // const isVisible = callbacksRef.current?.isObjectVisible?.() ?? false;
+    // if (newGuidance.direction === "center" && !isVisible) {
+    //   centerMissCountRef.current++;
+    //   if (centerMissCountRef.current >= REQUIRED_CENTER_MISSES) {
+    //     centerMissCountRef.current = 0;
+    //     callbacksRef.current?.onItemMissing?.();
+    //     return;
+    //   }
+    // } else {
+    //   centerMissCountRef.current = 0;
+    // }
 
     // Notify callback - repeat every GUIDANCE_COOLDOWN_MS
     if (callbacksRef.current?.onGuidanceChange) {

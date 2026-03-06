@@ -190,48 +190,34 @@ export class AudioService {
   }
 
   /**
-   * Play a one-shot sound effect via HTML5 Audio (works on iOS speaker with camera).
+   * Play a one-shot sound effect via speechSynthesis (reliable on iOS with active camera).
    */
-  async playSound(effect: SoundEffect): Promise<void> {
-    const frequency =
-      effect.frequency || (effect.type === "found" ? 523.25 : 350);
-    const duration = effect.duration || (effect.type === "found" ? 0.4 : 0.08);
-    const volume = effect.volume || (effect.type === "found" ? 0.15 : 0.08);
-    const waveform = effect.type === "found" ? "sine" : "triangle";
-
-    const url = this.getToneUrl(
-      frequency,
-      duration,
-      volume,
-      waveform as "sine" | "triangle",
-    );
-    const audio = new Audio(url);
-    try {
-      await audio.play();
-    } catch (e) {
-      console.warn("playSound failed:", e);
-    }
+  async playSound(_effect: SoundEffect): Promise<void> {
+    const utt = new SpeechSynthesisUtterance("bip");
+    utt.rate = 2;
+    utt.volume = 1;
+    utt.pitch = 2;
+    speechSynthesis.speak(utt);
   }
 
   /**
-   * Start continuous beeping via HTML5 Audio. Returns handle to update or stop.
-   * Uses a single reusable Audio element — no oscillator creation churn.
+   * Start continuous beeping via speechSynthesis (reliable on iOS with active camera).
    */
   startContinuousBeep(
-    baseFrequency: number,
+    _baseFrequency: number,
     beepRate: number,
   ): { update(frequency: number, rate: number): void; stop(): void } {
     let stopped = false;
     let interval: ReturnType<typeof setInterval> | null = null;
     let currentRate = beepRate;
-    let currentUrl = this.getToneUrl(baseFrequency, 0.1, 0.07, "triangle");
-    const beepAudio = new Audio();
 
     const playBeep = () => {
       if (stopped) return;
-      beepAudio.src = currentUrl;
-      beepAudio.currentTime = 0;
-      beepAudio.play().catch(() => {});
+      const utt = new SpeechSynthesisUtterance("bip");
+      utt.rate = 2;
+      utt.volume = 1;
+      utt.pitch = 2;
+      speechSynthesis.speak(utt);
     };
 
     const resetInterval = () => {
@@ -243,9 +229,8 @@ export class AudioService {
     resetInterval();
 
     return {
-      update: (frequency: number, rate: number) => {
+      update: (_frequency: number, rate: number) => {
         if (stopped) return;
-        currentUrl = this.getToneUrl(frequency, 0.1, 0.07, "triangle");
         if (rate !== currentRate) {
           currentRate = rate;
           resetInterval();
@@ -254,7 +239,7 @@ export class AudioService {
       stop: () => {
         stopped = true;
         if (interval) clearInterval(interval);
-        beepAudio.pause();
+        speechSynthesis.cancel();
       },
     };
   }
