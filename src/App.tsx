@@ -22,6 +22,7 @@ const NAV_PHRASES = [
 export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmedFound, setConfirmedFound] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
 
 
@@ -256,12 +257,22 @@ export default function App() {
         /* ========== SETUP SCREEN ========== */
         <div className="h-full flex flex-col p-6 max-w-md mx-auto justify-center relative">
           {/* Guide */}
-          <div className="mb-8 space-y-2 text-sm opacity-70 leading-relaxed">
-            <h1 className="text-lg font-bold neon-text mb-3">How it works</h1>
-            <p>Type what you're looking for — anything around you like "red mug" or "my keys".</p>
-            <p>Point your camera and slowly sweep around. Beeping means the item is in view — faster and higher beeping means a stronger match.</p>
-            <p>You'll hear voice directions to guide you back if you look away.</p>
-          </div>
+          <button
+            onClick={() => setGuideOpen(!guideOpen)}
+            aria-expanded={guideOpen}
+            aria-controls="guide-panel"
+            className="w-full text-left mb-4 py-3 px-4 rounded neon-border text-sm neon-text font-bold tracking-wider"
+          >
+            {guideOpen ? "Hide guide" : "How does this work?"}
+          </button>
+          {guideOpen && (
+            <div id="guide-panel" className="mb-6 space-y-2 text-sm opacity-70 leading-relaxed">
+              <p>First, tap "Enable Audio & Sensors" — the app uses sound to guide you.</p>
+              <p>Type what you're looking for — anything around you like "red mug" or "my keys".</p>
+              <p>Point your camera and slowly sweep around. Beeping means the item is in view — faster and higher beeping means a stronger match.</p>
+              <p>You'll hear voice directions to guide you back if you look away.</p>
+            </div>
+          )}
 
           {/* Inputs */}
           <div className="space-y-4 mb-8">
