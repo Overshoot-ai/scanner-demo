@@ -31,7 +31,7 @@ export class AudioService {
   private audioCache: Map<string, string> = new Map(); // text -> blobUrl
   private currentAudio: HTMLAudioElement | null = null;
   private speakingTimeout: ReturnType<typeof setTimeout> | null = null;
-  private toneCache: Map<string, string> = new Map(); // cache key -> blob URL
+  // private toneCache: Map<string, string> = new Map(); // cache key -> blob URL
 
   constructor() {
     const AudioContextClass =
@@ -285,61 +285,47 @@ export class AudioService {
   //   return url;
   // }
 
-  /**
-   * Render a tone to a PCM WAV blob.
-   */
-  private generateToneWav(
-    frequency: number,
-    duration: number,
-    volume: number,
-    waveform: "sine" | "triangle",
-  ): Blob {
-    const sampleRate = 22050;
-    const numSamples = Math.floor(sampleRate * duration);
-    const buffer = new ArrayBuffer(44 + numSamples * 2);
-    const view = new DataView(buffer);
-
-    // WAV header
-    const w = (o: number, s: string) => {
-      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
-    };
-    w(0, "RIFF");
-    view.setUint32(4, 36 + numSamples * 2, true);
-    w(8, "WAVE");
-    w(12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    w(36, "data");
-    view.setUint32(40, numSamples * 2, true);
-
-    // Render samples
-    for (let i = 0; i < numSamples; i++) {
-      const t = i / sampleRate;
-
-      // Waveform
-      let wave: number;
-      if (waveform === "triangle") {
-        wave = 2 * Math.abs(2 * ((t * frequency) % 1) - 1) - 1;
-      } else {
-        wave = Math.sin(2 * Math.PI * frequency * t);
-      }
-
-      // Envelope: 20ms fade-in, exponential decay over duration
-      const fadeIn = Math.min(1, i / (sampleRate * 0.02));
-      const decay = Math.exp((-3 * t) / duration);
-      const sample = wave * fadeIn * decay * volume;
-
-      const clamped = Math.max(-32768, Math.min(32767, sample * 32767));
-      view.setInt16(44 + i * 2, clamped, true);
-    }
-
-    return new Blob([buffer], { type: "audio/wav" });
-  }
+  // private generateToneWav(
+  //   frequency: number,
+  //   duration: number,
+  //   volume: number,
+  //   waveform: "sine" | "triangle",
+  // ): Blob {
+  //   const sampleRate = 22050;
+  //   const numSamples = Math.floor(sampleRate * duration);
+  //   const buffer = new ArrayBuffer(44 + numSamples * 2);
+  //   const view = new DataView(buffer);
+  //   const w = (o: number, s: string) => {
+  //     for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+  //   };
+  //   w(0, "RIFF");
+  //   view.setUint32(4, 36 + numSamples * 2, true);
+  //   w(8, "WAVE"); w(12, "fmt ");
+  //   view.setUint32(16, 16, true);
+  //   view.setUint16(20, 1, true);
+  //   view.setUint16(22, 1, true);
+  //   view.setUint32(24, sampleRate, true);
+  //   view.setUint32(28, sampleRate * 2, true);
+  //   view.setUint16(32, 2, true);
+  //   view.setUint16(34, 16, true);
+  //   w(36, "data");
+  //   view.setUint32(40, numSamples * 2, true);
+  //   for (let i = 0; i < numSamples; i++) {
+  //     const t = i / sampleRate;
+  //     let wave: number;
+  //     if (waveform === "triangle") {
+  //       wave = 2 * Math.abs(2 * ((t * frequency) % 1) - 1) - 1;
+  //     } else {
+  //       wave = Math.sin(2 * Math.PI * frequency * t);
+  //     }
+  //     const fadeIn = Math.min(1, i / (sampleRate * 0.02));
+  //     const decay = Math.exp((-3 * t) / duration);
+  //     const sample = wave * fadeIn * decay * volume;
+  //     const clamped = Math.max(-32768, Math.min(32767, sample * 32767));
+  //     view.setInt16(44 + i * 2, clamped, true);
+  //   }
+  //   return new Blob([buffer], { type: "audio/wav" });
+  // }
 }
 
 let audioServiceInstance: AudioService | null = null;
