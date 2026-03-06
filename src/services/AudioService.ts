@@ -267,27 +267,23 @@ export class AudioService {
     }
   }
 
-  /**
-   * Get a cached blob URL for a tone with given parameters.
-   * Quantizes frequency to 50Hz steps to limit cache entries.
-   */
-  private getToneUrl(
-    frequency: number,
-    duration: number,
-    volume: number,
-    waveform: "sine" | "triangle",
-  ): string {
-    const qFreq = Math.round(frequency / 50) * 50 || 50;
-    const key = `${waveform}-${qFreq}-${duration}-${volume}`;
-    let url = this.toneCache.get(key);
-    if (!url) {
-      url = URL.createObjectURL(
-        this.generateToneWav(qFreq, duration, volume, waveform),
-      );
-      this.toneCache.set(key, url);
-    }
-    return url;
-  }
+  // private getToneUrl(
+  //   frequency: number,
+  //   duration: number,
+  //   volume: number,
+  //   waveform: "sine" | "triangle",
+  // ): string {
+  //   const qFreq = Math.round(frequency / 50) * 50 || 50;
+  //   const key = `${waveform}-${qFreq}-${duration}-${volume}`;
+  //   let url = this.toneCache.get(key);
+  //   if (!url) {
+  //     url = URL.createObjectURL(
+  //       this.generateToneWav(qFreq, duration, volume, waveform),
+  //     );
+  //     this.toneCache.set(key, url);
+  //   }
+  //   return url;
+  // }
 
   /**
    * Render a tone to a PCM WAV blob.

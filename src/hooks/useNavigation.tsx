@@ -52,10 +52,10 @@ export function useNavigation(callbacks?: NavigationCallbacks) {
 
   const lastGuidanceRef = useRef<string>("");
   const lastGuidanceTimeRef = useRef<number>(0);
-  const centerMissCountRef = useRef<number>(0);
+  // const centerMissCountRef = useRef<number>(0);
   const callbacksRef = useRef(callbacks);
   const GUIDANCE_COOLDOWN_MS = 1500; // Repeat every 1.5 seconds
-  const REQUIRED_CENTER_MISSES = 3;
+  // const REQUIRED_CENTER_MISSES = 3;
 
   // Keep callbacks ref in sync but don't trigger re-renders
   useEffect(() => {
